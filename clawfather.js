@@ -20,7 +20,7 @@ const http = require("http");
 const https = require("https");
 const { spawn, execSync } = require("child_process");
 const OpenAI = require("openai");
-const TelegramBot = require("node-telegram-bot-api");
+// const { Bot } = require("grammy"); // Reserved for future context capture
 
 // ── ANSI Colors ─────────────────────────────────────────────
 const c = {
@@ -275,7 +275,7 @@ function buildPicoClawConfig(cfg) {
     },
     channels: {
       telegram: {
-        enabled: false, // Node.js handles Telegram; PicoClaw used as agent CLI only
+        enabled: true,
         token: cfg.telegram.token,
         proxy: "",
         allow_from: [],
@@ -373,10 +373,13 @@ function writeTelegramContextSkill(workspaceDir, port) {
   fs.writeFileSync(path.join(skillDir, "SKILL.md"), content);
 }
 
-/** Spawns `picoclaw gateway` and forwards stdio */
+/** Spawns `picoclaw gateway` with tool server for context lookups */
 function runPicoClawGateway(picoClawPath, cfg) {
   const picoConfigPath = writePicoClawConfig(cfg);
   log.ok(`PicoClaw config: ${picoConfigPath}`);
+
+  const telegramContextStore = new Map();
+  startToolServer(telegramContextStore);
 
   console.log();
   console.log(`  ${c.bold}${c.green}${"═".repeat(56)}${c.reset}`);
@@ -505,79 +508,56 @@ function startToolServer(contextStore) {
   return server;
 }
 
-// ── Node.js Telegram Bot (replaces PicoClaw built-in Telegram) ──
+// ── Node.js Telegram Bot (grammY — supports private + group chats) ──
 const TELEGRAM_SESSION_PREFIX = "telegram:";
+const FALLBACK_ERROR_MESSAGE = "Xin lỗi, có lỗi xảy ra. Vui lòng thử lại.";
+
+/** Removes @botUsername from message text so the LLM gets clean input */
+function stripBotMention(text, botUsername) {
+  const pattern = new RegExp(`@${botUsername}`, "gi");
+  return text.replace(pattern, "").replace(/\s+/g, " ").trim();
+}
 
 /**
- * Starts a Node.js Telegram bot that delegates to PicoClaw agent CLI.
- * Stores message context in a Map; exposes it via HTTP tool server.
+ * Shared message handler for both private and group chats.
+ * Strips bot mention, stores context, calls PicoClaw, replies.
+ */
+async function handleMessage(ctx, picoClawPath, telegramContextStore) {
+  const msg = ctx.msg;
+  const chatId = String(msg.chat.id);
+  const sessionId = TELEGRAM_SESSION_PREFIX + chatId;
+  const cleanText = stripBotMention(msg.text, ctx.me.username);
+
+  if (!cleanText) return;
+
+  telegramContextStore.set(chatId, buildMessageContext(msg));
+  const content = `[chat_id:${chatId}]\n${cleanText}`;
+
+  log.info(`[chat:${chatId}] ${msg.from?.username || "user"}: ${cleanText.slice(0, 80)}`);
+
+  try {
+    const response = await callPicoClawAgent(picoClawPath, content, sessionId);
+    log.bot(`[chat:${chatId}] ${response.slice(0, 80)}`);
+    await ctx.reply(response, {
+      parse_mode: "Markdown",
+      reply_parameters: { message_id: msg.message_id },
+    });
+  } catch (err) {
+    log.err(`[chat:${chatId}] ${err.message}`);
+    await ctx.reply(FALLBACK_ERROR_MESSAGE, {
+      reply_parameters: { message_id: msg.message_id },
+    });
+  }
+}
+
+/**
+ * Launches PicoClaw gateway with built-in Telegram enabled.
+ * Tool server runs alongside for context lookups.
+ * grammY bot code is kept but disabled — reserved for future
+ * context capture if PicoClaw adds a way to coexist.
  */
 function runBot(cfg, picoClawPath) {
-  writePicoClawConfig(cfg);
-
-  const telegramContextStore = new Map();
-  startToolServer(telegramContextStore);
-
-  console.log();
-  console.log(`  ${c.bold}${c.green}${"═".repeat(56)}${c.reset}`);
-  console.log(`  ${c.bold}${c.green}  🦞 "${cfg.bot.name}" — Telegram Bot${c.reset}`);
-  console.log(`  ${c.green}  Ctrl+C để dừng${c.reset}`);
-  console.log(`  ${c.bold}${c.green}${"═".repeat(56)}${c.reset}`);
-  console.log();
-
-  const bot = new TelegramBot(cfg.telegram.token, { polling: true });
-
-  bot.onText(/\/start/, (msg) => {
-    const welcome = cfg.bot.welcome_message || `Xin chào! Tôi là ${cfg.bot.name}.`;
-    bot.sendMessage(msg.chat.id, welcome);
-  });
-
-  bot.onText(/\/clear/, (msg) => {
-    log.info(`[chat:${msg.chat.id}] Session clear requested (PicoClaw manages memory)`);
-    bot.sendMessage(msg.chat.id, "Session đã được reset.");
-  });
-
-  bot.onText(/\/info/, (msg) => {
-    const info = [
-      `🦞 *${cfg.bot.name}*`,
-      `Model: \`${cfg.llm.model}\``,
-      `Temp: ${cfg.bot.pipeline?.temperature ?? 0.7}`,
-      `Max tokens: ${cfg.bot.pipeline?.max_tokens ?? 1024}`,
-    ].join("\n");
-    bot.sendMessage(msg.chat.id, info, { parse_mode: "Markdown" });
-  });
-
-  bot.on("message", async (msg) => {
-    if (!msg.text || msg.text.startsWith("/")) return;
-
-    const chatId = String(msg.chat.id);
-    const sessionId = TELEGRAM_SESSION_PREFIX + chatId;
-
-    telegramContextStore.set(chatId, buildMessageContext(msg));
-    const content = `[chat_id:${chatId}]\n${msg.text}`;
-
-    log.info(`[chat:${chatId}] ${msg.from?.username || "user"}: ${msg.text.slice(0, 80)}`);
-
-    try {
-      const response = await callPicoClawAgent(picoClawPath, content, sessionId);
-      log.bot(`[chat:${chatId}] ${response.slice(0, 80)}`);
-      await bot.sendMessage(chatId, response, {
-        reply_to_message_id: msg.message_id,
-        parse_mode: "Markdown",
-      });
-    } catch (err) {
-      log.err(`[chat:${chatId}] ${err.message}`);
-      await bot.sendMessage(chatId, "Xin lỗi, có lỗi xảy ra. Vui lòng thử lại.", {
-        reply_to_message_id: msg.message_id,
-      });
-    }
-  });
-
-  bot.on("polling_error", (err) => {
-    log.err(`Telegram polling error: ${err.message}`);
-  });
-
-  log.ok("Telegram bot đang chạy (polling)...");
+  runPicoClawGateway(picoClawPath, cfg);
 }
 
 // ── OpenAI client ───────────────────────────────────────────
