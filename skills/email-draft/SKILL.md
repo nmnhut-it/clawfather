@@ -38,25 +38,20 @@ https://outlook.office.com/mail/deeplink/compose?to=EMAIL&cc=CC&bcc=BCC&subject=
 
 1. **Xác định email provider** của user (hỏi nếu chưa biết: Gmail hay Outlook?)
 2. **URL-encode** tất cả nội dung (subject, body, cc, bcc)
-3. **Mở browser**:
-   - Windows: `exec cmd /c start "" "URL"` (PHẢI dùng cmd /c để tránh lỗi PowerShell với ký tự &)
-   - Mac/Linux: `exec open "URL"`
+3. **Mở browser** bằng script trong workspace:
+   - Cross-platform: `exec ./skills/email-draft/open-url.sh "URL"`
+   - Windows only: `exec ./skills/email-draft/open-url.bat "URL"`
 
 ## Ví dụ
 
-### Gmail (Windows - PHẢI dùng cmd /c)
+### Gmail
 ```bash
-exec cmd /c start "" "https://mail.google.com/mail/?view=cm&to=boss@company.com&su=Project%20Update&body=Dear%20Boss%2C%0A%0AProject%20is%2080%25%20complete."
+exec ./skills/email-draft/open-url.sh "https://mail.google.com/mail/?view=cm&to=boss@company.com&su=Project%20Update&body=Dear%20Boss%2C%0A%0AProject%20is%2080%25%20complete."
 ```
 
-### Gmail (Mac/Linux)
+### Outlook
 ```bash
-exec open "https://mail.google.com/mail/?view=cm&to=boss@company.com&su=Project%20Update&body=Dear%20Boss%2C%0A%0AProject%20is%2080%25%20complete."
-```
-
-### Outlook (Windows)
-```bash
-exec cmd /c start "" "https://outlook.live.com/mail/0/deeplink/compose?to=boss@company.com&subject=Project%20Update&body=Dear%20Boss%2C%0A%0AProject%20is%2080%25%20complete."
+exec ./skills/email-draft/open-url.sh "https://outlook.live.com/mail/0/deeplink/compose?to=boss@company.com&subject=Project%20Update&body=Dear%20Boss%2C%0A%0AProject%20is%2080%25%20complete."
 ```
 
 ## URL Encoding

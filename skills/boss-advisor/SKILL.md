@@ -88,9 +88,8 @@ Answer: [Đề xuất của bạn]
 ## Quy trình tư vấn
 
 1. **Đọc boss profile** (nếu có):
-```bash
-exec cat boss-profile.json 2>/dev/null || echo '{"bosses":[],"interactions":[]}'
-```
+   - Dùng tool `read_file("boss-profile.json")`
+   - Nếu file không tồn tại, dùng default: `{"bosses":[],"interactions":[]}`
 
 2. **Phân tích tin nhắn sếp:**
    - Tone: urgent? friendly? formal?
@@ -134,7 +133,9 @@ exec cat boss-profile.json 2>/dev/null || echo '{"bosses":[],"interactions":[]}'
 ## Cập nhật profile sếp
 
 Khi user nói "sếp thích...", "sếp không thích...", "note về sếp":
-→ Cập nhật vào boss-profile.json để nhớ cho lần sau
+- Dùng `read_file("boss-profile.json")` để đọc profile hiện tại
+- Cập nhật thông tin mới
+- Dùng `write_file("boss-profile.json", ...)` để lưu
 
 ---
 
@@ -190,9 +191,8 @@ Khi user nói "sếp thích...", "sếp không thích...", "note về sếp":
    > "Kết quả thế nào? (Để mình học và tư vấn tốt hơn lần sau)"
 
 2. **Khi nhận feedback**, cập nhật:
-```bash
-exec cat learning-log.json 2>/dev/null || echo '{"lessons":[],"patterns":{}}'
-```
+   - Dùng tool `read_file("learning-log.json")` để đọc
+   - Dùng tool `write_file("learning-log.json", ...)` để lưu
 
 3. **Phân tích pattern:**
    - Sếp nào thích framework gì?

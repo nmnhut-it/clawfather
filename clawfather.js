@@ -22,6 +22,7 @@ const crypto = require("crypto");
 const { spawn, execSync } = require("child_process");
 require("dotenv").config();
 const OpenAI = require("openai");
+const { Parser } = require("htmlparser2");
 // const { Bot } = require("grammy"); // Reserved for future context capture
 
 // ── ANSI Colors ─────────────────────────────────────────────
@@ -58,6 +59,10 @@ const DATA_DIR = path.join(__dirname, "data");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
+// ── Multi-bot storage ───────────────────────────────────
+const BOTS_DIR = path.join(DATA_DIR, "bots");
+const PICOCLAW_WORKSPACES_DIR = path.join(os.homedir(), ".picoclaw", "workspaces");
+
 // ── PicoClaw ────────────────────────────────────────────
 const PICOCLAW_BIN_DIR = path.join(DATA_DIR, "bin");
 const PICOCLAW_RELEASES_URL = "https://api.github.com/repos/sipeed/picoclaw/releases/latest";
@@ -77,6 +82,74 @@ function loadConfig() {
 }
 function saveConfig(cfg) {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+}
+
+// ── Multi-bot storage ───────────────────────────────────────
+
+/** Converts bot name to filesystem-safe slug ID */
+function slugify(name) {
+  const base = name.toLowerCase()
+    .replace(/[^a-z0-9\u00C0-\u024F]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 50);
+  if (!fs.existsSync(BOTS_DIR)) return base;
+  if (!fs.existsSync(path.join(BOTS_DIR, `${base}.json`))) return base;
+  for (let i = 2; i <= 99; i++) {
+    const candidate = `${base}-${i}`;
+    if (!fs.existsSync(path.join(BOTS_DIR, `${candidate}.json`))) return candidate;
+  }
+  return `${base}-${Date.now()}`;
+}
+
+/** Reads all bot profiles from data/bots/ */
+function loadAllBots() {
+  if (!fs.existsSync(BOTS_DIR)) return [];
+  return fs.readdirSync(BOTS_DIR)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => {
+      try { return JSON.parse(fs.readFileSync(path.join(BOTS_DIR, f), "utf-8")); }
+      catch { return null; }
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+}
+
+/** Reads a single bot profile by ID */
+function loadBot(botId) {
+  const filePath = path.join(BOTS_DIR, `${botId}.json`);
+  try { return JSON.parse(fs.readFileSync(filePath, "utf-8")); }
+  catch { return null; }
+}
+
+/** Writes a bot profile to data/bots/{id}.json */
+function saveBot(profile) {
+  if (!fs.existsSync(BOTS_DIR)) fs.mkdirSync(BOTS_DIR, { recursive: true });
+  fs.writeFileSync(
+    path.join(BOTS_DIR, `${profile.id}.json`),
+    JSON.stringify(profile, null, 2),
+  );
+}
+
+/** Removes bot profile JSON and optionally its workspace */
+async function deleteBot(botId) {
+  const filePath = path.join(BOTS_DIR, `${botId}.json`);
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  const workDir = path.join(PICOCLAW_WORKSPACES_DIR, botId);
+  if (fs.existsSync(workDir)) {
+    if (await confirm(`Xóa workspace "${botId}"?`, false)) {
+      fs.rmSync(workDir, { recursive: true, force: true });
+      log.ok(`Đã xóa workspace: ${workDir}`);
+    }
+  }
+}
+
+/** Displays numbered list of bots, returns the selected profile */
+async function chooseBotFromList(bots, prompt) {
+  const labels = bots.map(
+    (b) => `${b.bot.name} ${c.dim}(${b.llm.model})${c.reset}`,
+  );
+  const idx = await choose(prompt, labels);
+  return bots[idx];
 }
 
 // ── Readline helpers ────────────────────────────────────────
@@ -261,13 +334,16 @@ async function ensurePicoClaw() {
 
 // ── PicoClaw config generation ──────────────────────────
 
-/** Builds the PicoClaw config object from ClawFather config */
+/** Builds the PicoClaw config object from bot profile (cfg must include .id) */
 function buildPicoClawConfig(cfg) {
+  const workspace = cfg.id
+    ? `~/.picoclaw/workspaces/${cfg.id}`
+    : "~/.picoclaw/workspace";
   return {
     agents: {
       defaults: {
-        workspace: "~/.picoclaw/workspace",
-        restrict_to_workspace: true,
+        workspace,
+        restrict_to_workspace: false,
         provider: "openai",
         model: cfg.llm.model,
         max_tokens: cfg.bot.pipeline?.max_tokens || 8192,
@@ -286,7 +362,8 @@ function buildPicoClawConfig(cfg) {
     providers: {
       openai: {
         api_key: cfg.llm.apiKey || "",
-        api_base: cfg.llm.baseURL,
+        // Route through LLM proxy to parse text-based tool calls
+        api_base: `http://${LLM_PROXY_HOST}:${LLM_PROXY_PORT}/v1`,
       },
     },
   };
@@ -295,30 +372,37 @@ function buildPicoClawConfig(cfg) {
 /** Writes ~/.picoclaw/config.json, workspace AGENTS.md, and skills */
 function writePicoClawConfig(cfg) {
   const picoDir = path.join(os.homedir(), ".picoclaw");
-  const workDir = path.join(picoDir, "workspace");
+  const workDir = cfg.id
+    ? path.join(PICOCLAW_WORKSPACES_DIR, cfg.id)
+    : path.join(picoDir, "workspace");
   fs.mkdirSync(workDir, { recursive: true });
 
   const configPath = path.join(picoDir, "config.json");
   fs.writeFileSync(configPath, JSON.stringify(buildPicoClawConfig(cfg), null, 2));
 
-  fs.writeFileSync(path.join(workDir, "AGENTS.md"), buildAgentsMd(cfg.bot, workDir));
-  writePersonalAssistantSkills(workDir);
+  const skills = cfg.bot.skills || discoverSkills().map((s) => s.name);
+  fs.writeFileSync(path.join(workDir, "AGENTS.md"), buildAgentsMd(cfg.bot, workDir, skills));
+  writePersonalAssistantSkills(workDir, skills);
   return configPath;
 }
 
-/** Removes PicoClaw config and workspace directory */
-async function removePicoClawConfig() {
+/** Removes PicoClaw config and workspace. If botId given, removes only that workspace. */
+async function removePicoClawConfig(botId) {
   const picoDir = path.join(os.homedir(), ".picoclaw");
-  const configPath = path.join(picoDir, "config.json");
-  const workDir = path.join(picoDir, "workspace");
-
   let removed = false;
 
-  if (fs.existsSync(configPath)) {
-    fs.unlinkSync(configPath);
-    log.ok(`Đã xóa: ${configPath}`);
-    removed = true;
+  if (!botId) {
+    const configPath = path.join(picoDir, "config.json");
+    if (fs.existsSync(configPath)) {
+      fs.unlinkSync(configPath);
+      log.ok(`Đã xóa: ${configPath}`);
+      removed = true;
+    }
   }
+
+  const workDir = botId
+    ? path.join(PICOCLAW_WORKSPACES_DIR, botId)
+    : path.join(picoDir, "workspace");
 
   if (fs.existsSync(workDir)) {
     fs.rmSync(workDir, { recursive: true, force: true });
@@ -326,15 +410,12 @@ async function removePicoClawConfig() {
     removed = true;
   }
 
-  if (!removed) {
-    log.info("Không có gì để xóa.");
-  }
-
+  if (!removed) log.info("Không có gì để xóa.");
   return removed;
 }
 
-/** Builds AGENTS.md content from bot design data */
-function buildAgentsMd(bot, workDir) {
+/** Builds AGENTS.md content from bot design data and selected skills */
+function buildAgentsMd(bot, workDir, selectedSkills) {
   const lines = [`# Agent: ${bot.name}`, ""];
   lines.push(bot.system_prompt || "");
   if (bot.features?.length) {
@@ -342,46 +423,35 @@ function buildAgentsMd(bot, workDir) {
     bot.features.forEach((f) => lines.push(`- ${f}`));
   }
 
-  // Personal Assistant Skills
-  lines.push(
-    "",
-    "## Personal Assistant Skills",
-    "",
-    "### 👔 Boss Advisor",
-    "Tư vấn cách trả lời tin nhắn sếp chuyên nghiệp.",
-    "- Frameworks: BLUF, STAR, SCQA, Pyramid Principle",
-    "- Nhớ style của từng sếp trong `boss-profile.json`",
-    "- User forward tin nhắn sếp → Bot gợi ý cách reply",
-    "",
-    "### ⏰ Reminder",
-    "Đặt nhắc nhở sử dụng PicoClaw cron.",
-    "- Một lần: \"nhắc tôi sau 30 phút\"",
-    "- Định kỳ: \"mỗi sáng 8h nhắc check email\"",
-    "- Xem: \"list reminders\"",
-    "",
-    "### 📧 Email Draft",
-    "Soạn email trong Gmail hoặc Outlook Web.",
-    "- Mở browser với nội dung đã điền sẵn",
-    "- Kết hợp Boss Advisor để soạn chuyên nghiệp",
-    "- User review và bấm Send thủ công",
-  );
+  // Dynamic skills section from selected skills
+  if (selectedSkills?.length) {
+    lines.push("", "## Personal Assistant Skills", "");
+    for (const skillName of selectedSkills) {
+      const meta = parseSkillMeta(skillName);
+      if (!meta) continue;
+      const heading = meta.emoji ? `### ${meta.emoji} ${meta.name}` : `### ${meta.name}`;
+      lines.push(heading, meta.description, "");
+    }
+  }
 
-  // File paths reference
-  const bossFile = path.join(workDir, "boss-profile.json");
-  const learningFile = path.join(workDir, "learning-log.json");
-  lines.push(
-    "",
-    "## Data Files",
-    `- Boss profiles: \`${bossFile}\``,
-    `- Learning log: \`${learningFile}\``,
-    "",
-    "## 🧠 Self-Learning",
-    "Bot tự học từ feedback của user:",
-    "- User nói 'sếp khen', 'hay đấy' → Ghi nhận thành công",
-    "- User nói 'sếp không hài lòng', 'fail' → Học để tránh lặp lại",
-    "- Sau mỗi tư vấn, hỏi kết quả để cải thiện",
-    "- Phân tích pattern: sếp nào thích framework gì, thời điểm nào tốt",
-  );
+  // Boss-advisor specific sections
+  const hasBossAdvisor = selectedSkills?.includes("boss-advisor");
+  if (hasBossAdvisor) {
+    const bossFile = path.join(workDir, "boss-profile.json");
+    const learningFile = path.join(workDir, "learning-log.json");
+    lines.push(
+      "## Data Files",
+      `- Boss profiles: \`${bossFile}\``,
+      `- Learning log: \`${learningFile}\``,
+      "",
+      "## Self-Learning",
+      "Bot tự học từ feedback của user:",
+      "- User nói 'sếp khen', 'hay đấy' -> Ghi nhận thành công",
+      "- User nói 'sếp không hài lòng', 'fail' -> Học để tránh lặp lại",
+      "- Sau mỗi tư vấn, hỏi kết quả để cải thiện",
+      "- Phân tích pattern: sếp nào thích framework gì, thời điểm nào tốt",
+    );
+  }
 
   return lines.join("\n") + "\n";
 }
@@ -391,7 +461,6 @@ function buildAgentsMd(bot, workDir) {
 // Uses MD5 hash to detect changes and only update when needed
 
 const SKILLS_SRC_DIR = path.join(__dirname, "skills");
-const SKILL_NAMES = ["boss-advisor", "reminder", "email-draft"];
 const SKILLS_HASH_FILE = "skills-hash.json";
 
 /** Calculates MD5 hash of file content */
@@ -401,76 +470,130 @@ function fileHash(filePath) {
   return crypto.createHash("md5").update(content).digest("hex");
 }
 
+/** Parses YAML-like front-matter from a SKILL.md file. Returns { name, description, emoji } */
+function parseSkillMeta(skillName) {
+  const skillFile = path.join(SKILLS_SRC_DIR, skillName, "SKILL.md");
+  if (!fs.existsSync(skillFile)) return null;
+  const content = fs.readFileSync(skillFile, "utf-8");
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!fmMatch) return { name: skillName, description: "", emoji: "" };
+
+  const fm = fmMatch[1];
+  const name = fm.match(/^name:\s*(.+)$/m)?.[1]?.trim() || skillName;
+  const description = fm.match(/^description:\s*(.+)$/m)?.[1]?.trim() || "";
+  let emoji = "";
+  const metaMatch = fm.match(/^metadata:\s*(.+)$/m)?.[1]?.trim();
+  if (metaMatch) {
+    try {
+      const meta = JSON.parse(metaMatch);
+      emoji = meta?.nanobot?.emoji || "";
+    } catch { /* ignore */ }
+  }
+  return { name, description, emoji };
+}
+
+/** Auto-discovers all skills from skills/ directory. Returns [{ name, description, emoji }] */
+function discoverSkills() {
+  if (!fs.existsSync(SKILLS_SRC_DIR)) return [];
+  return fs.readdirSync(SKILLS_SRC_DIR)
+    .filter((d) => {
+      const skillFile = path.join(SKILLS_SRC_DIR, d, "SKILL.md");
+      return fs.existsSync(skillFile);
+    })
+    .map((d) => parseSkillMeta(d))
+    .filter(Boolean);
+}
+
 /**
- * Copies skill files from clawfather/skills/ to workspace/skills/
- * Only copies if hash changed. Initializes data files if needed.
+ * Copies skill files to workspace/skills/ for selected skills only.
+ * Copies all files in each skill dir (SKILL.md, .sh, .bat, etc.).
+ * Hash-checks to avoid redundant writes. Cleans up deselected skills.
  */
-function writePersonalAssistantSkills(workspaceDir) {
+function writePersonalAssistantSkills(workspaceDir, selectedSkills) {
   const skillsDestDir = path.join(workspaceDir, "skills");
   const hashFilePath = path.join(workspaceDir, SKILLS_HASH_FILE);
 
-  // Load existing hashes
   let storedHashes = {};
   if (fs.existsSync(hashFilePath)) {
     try {
       storedHashes = JSON.parse(fs.readFileSync(hashFilePath, "utf-8"));
-    } catch { /* ignore parse errors */ }
+    } catch { /* ignore */ }
   }
 
   const newHashes = {};
   let updatedCount = 0;
 
-  for (const skillName of SKILL_NAMES) {
+  for (const skillName of selectedSkills) {
     const srcDir = path.join(SKILLS_SRC_DIR, skillName);
+    if (!fs.existsSync(srcDir)) continue;
     const destDir = path.join(skillsDestDir, skillName);
     fs.mkdirSync(destDir, { recursive: true });
 
-    const srcFile = path.join(srcDir, "SKILL.md");
-    const destFile = path.join(destDir, "SKILL.md");
+    // Copy all files in the skill directory
+    const srcFiles = fs.readdirSync(srcDir).filter((f) =>
+      fs.statSync(path.join(srcDir, f)).isFile(),
+    );
+    for (const fileName of srcFiles) {
+      const srcFile = path.join(srcDir, fileName);
+      const destFile = path.join(destDir, fileName);
+      const hashKey = `${skillName}/${fileName}`;
+      const srcH = fileHash(srcFile);
+      newHashes[hashKey] = srcH;
 
-    if (fs.existsSync(srcFile)) {
-      const srcHash = fileHash(srcFile);
-      newHashes[skillName] = srcHash;
-
-      // Only copy if hash changed or file doesn't exist
-      if (srcHash !== storedHashes[skillName] || !fs.existsSync(destFile)) {
+      if (srcH !== storedHashes[hashKey] || !fs.existsSync(destFile)) {
         fs.copyFileSync(srcFile, destFile);
+        // Set executable on .sh files (non-Windows)
+        if (fileName.endsWith(".sh") && process.platform !== "win32") {
+          fs.chmodSync(destFile, 0o755);
+        }
         updatedCount++;
-        log.dim(`  Skill updated: ${skillName}`);
       }
     }
   }
 
-  // Save new hashes
+  // Clean up skills not in selected list
+  if (fs.existsSync(skillsDestDir)) {
+    for (const dir of fs.readdirSync(skillsDestDir)) {
+      if (!selectedSkills.includes(dir)) {
+        const rmPath = path.join(skillsDestDir, dir);
+        if (fs.statSync(rmPath).isDirectory()) {
+          fs.rmSync(rmPath, { recursive: true, force: true });
+          log.dim(`  Skill removed: ${dir}`);
+        }
+      }
+    }
+  }
+
   fs.writeFileSync(hashFilePath, JSON.stringify(newHashes, null, 2));
 
   if (updatedCount > 0) {
-    log.ok(`Skills: ${updatedCount} updated`);
+    log.ok(`Skills: ${updatedCount} file(s) updated`);
   } else {
     log.dim("  Skills: up to date");
   }
 
-  // Initialize data files for boss-advisor
-  const bossProfileFile = path.join(workspaceDir, "boss-profile.json");
-  const learningLogFile = path.join(workspaceDir, "learning-log.json");
-
-  if (!fs.existsSync(bossProfileFile)) {
-    fs.writeFileSync(bossProfileFile, JSON.stringify({
-      bosses: [],
-      interactions: []
-    }, null, 2));
-  }
-
-  if (!fs.existsSync(learningLogFile)) {
-    fs.writeFileSync(learningLogFile, JSON.stringify({
-      lessons: [],
-      patterns: {}
-    }, null, 2));
+  // Initialize data files for boss-advisor if selected
+  if (selectedSkills.includes("boss-advisor")) {
+    const bossProfileFile = path.join(workspaceDir, "boss-profile.json");
+    const learningLogFile = path.join(workspaceDir, "learning-log.json");
+    if (!fs.existsSync(bossProfileFile)) {
+      fs.writeFileSync(bossProfileFile, JSON.stringify({
+        bosses: [], interactions: [],
+      }, null, 2));
+    }
+    if (!fs.existsSync(learningLogFile)) {
+      fs.writeFileSync(learningLogFile, JSON.stringify({
+        lessons: [], patterns: {},
+      }, null, 2));
+    }
   }
 }
 
-/** Spawns `picoclaw gateway` with tool server for context lookups */
+/** Spawns `picoclaw gateway` with tool server and LLM proxy */
 function runPicoClawGateway(picoClawPath, cfg) {
+  // Start LLM proxy first (parses text-based tool calls from Qwen)
+  startLLMProxy(cfg.llm.baseURL, cfg.llm.apiKey);
+
   const picoConfigPath = writePicoClawConfig(cfg);
   log.ok(`PicoClaw config: ${picoConfigPath}`);
 
@@ -601,6 +724,169 @@ function startToolServer(contextStore) {
   server.listen(TOOL_SERVER_PORT, TOOL_SERVER_HOST, () => {
     log.ok(`Tool server: http://${TOOL_SERVER_HOST}:${TOOL_SERVER_PORT}`);
   });
+  return server;
+}
+
+// ── LLM Proxy (converts text-based tool calls to OpenAI format) ────
+const LLM_PROXY_PORT = 13580;
+const LLM_PROXY_HOST = "127.0.0.1";
+
+/**
+ * Parses Qwen-format tool calls from LLM response content.
+ * Format: <function=NAME><parameter=KEY>VALUE</parameter></function>
+ * Uses htmlparser2 for robust parsing of malformed XML-like content.
+ * Returns { text, toolCalls } where text is content without tool calls.
+ */
+function parseQwenToolCalls(content) {
+  if (!content || typeof content !== "string") {
+    return { text: content || "", toolCalls: [] };
+  }
+
+  const toolCalls = [];
+  let currentFunc = null;
+  let currentParam = null;
+
+  const parser = new Parser({
+    onopentag(name) {
+      // htmlparser2 sees <function=write_file> as tag name "function=write_file"
+      if (name.startsWith("function=")) {
+        const funcName = name.slice("function=".length);
+        if (funcName) {
+          currentFunc = { name: funcName, args: {} };
+        }
+      }
+      // Handle <parameter=KEY> - tag name is "parameter=key"
+      if (name.startsWith("parameter=") && currentFunc) {
+        currentParam = name.slice("parameter=".length);
+      }
+    },
+    ontext(text) {
+      if (currentFunc && currentParam) {
+        // Inside a parameter tag - accumulate value
+        const existing = currentFunc.args[currentParam] || "";
+        currentFunc.args[currentParam] = existing + text;
+      }
+    },
+    onclosetag(name) {
+      if (name.startsWith("parameter=")) {
+        // Trim the parameter value
+        if (currentFunc && currentParam) {
+          currentFunc.args[currentParam] = (currentFunc.args[currentParam] || "").trim();
+        }
+        currentParam = null;
+      }
+      if (name.startsWith("function=") && currentFunc) {
+        toolCalls.push({
+          id: `call_${crypto.randomBytes(12).toString("hex")}`,
+          type: "function",
+          function: {
+            name: currentFunc.name,
+            arguments: JSON.stringify(currentFunc.args),
+          },
+        });
+        currentFunc = null;
+      }
+    },
+  }, { decodeEntities: true, lowerCaseTags: true });
+
+  parser.write(content);
+  parser.end();
+
+  // Extract text content (remove tool call blocks)
+  const toolCallPattern = /<function=[\s\S]*?<\/function>|<\/tool_call>/gi;
+  const cleanText = content.replace(toolCallPattern, "").trim();
+
+  return { text: cleanText, toolCalls };
+}
+
+/**
+ * Transforms LLM response by parsing text-based tool calls.
+ * Modifies choices[].message to include tool_calls array if found.
+ */
+function transformLLMResponse(responseData) {
+  if (!responseData?.choices) return responseData;
+
+  for (const choice of responseData.choices) {
+    const msg = choice.message;
+    if (!msg?.content) continue;
+
+    const { text, toolCalls } = parseQwenToolCalls(msg.content);
+
+    if (toolCalls.length > 0) {
+      msg.content = text || null;
+      msg.tool_calls = toolCalls;
+      log.info(`LLM Proxy: Parsed ${toolCalls.length} tool call(s)`);
+    }
+  }
+
+  return responseData;
+}
+
+/**
+ * Starts the LLM proxy server that intercepts and transforms responses.
+ * Forwards requests to the actual LLM endpoint, parses tool calls from
+ * text content, and converts them to OpenAI-style tool_calls format.
+ */
+function startLLMProxy(targetBaseURL, apiKey) {
+  const server = http.createServer(async (req, res) => {
+    // Only proxy chat completions endpoint
+    if (req.method === "POST" && req.url?.startsWith("/v1/chat/completions")) {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", async () => {
+        try {
+          const requestData = JSON.parse(body);
+
+          // Forward to actual LLM using OpenAI client
+          const client = new OpenAI({
+            baseURL: targetBaseURL,
+            apiKey: apiKey || "not-needed",
+            timeout: 120000,
+          });
+
+          const response = await client.chat.completions.create(requestData);
+
+          // Transform response (parse text-based tool calls)
+          const transformed = transformLLMResponse(response);
+
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(transformed));
+        } catch (err) {
+          log.err(`LLM Proxy error: ${err.message}`);
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: err.message } }));
+        }
+      });
+      return;
+    }
+
+    // Pass through other endpoints (models list, etc.)
+    if (req.method === "GET" && req.url?.startsWith("/v1/models")) {
+      try {
+        const client = new OpenAI({
+          baseURL: targetBaseURL,
+          apiKey: apiKey || "not-needed",
+        });
+        const models = await client.models.list();
+        const modelList = [];
+        for await (const m of models) modelList.push(m);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ data: modelList }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: err.message } }));
+      }
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  });
+
+  server.listen(LLM_PROXY_PORT, LLM_PROXY_HOST, () => {
+    log.ok(`LLM Proxy: http://${LLM_PROXY_HOST}:${LLM_PROXY_PORT} → ${targetBaseURL}`);
+  });
+
   return server;
 }
 
@@ -744,6 +1030,7 @@ async function setupLLM(existing) {
     "text-gen-webui   → http://localhost:5000/v1",
     "OpenRouter       → https://openrouter.ai/api/v1",
     "NVIDIA NIM       → https://integrate.api.nvidia.com/v1",
+    "ZingPlay Chat    → https://chat.zingplay.com/api/v1",
     "Tự nhập URL khác",
   ]);
 
@@ -755,6 +1042,7 @@ async function setupLLM(existing) {
     "http://localhost:5000/v1",
     "https://openrouter.ai/api/v1",
     "https://integrate.api.nvidia.com/v1",
+    "https://chat.zingplay.com/api/v1",
     "",
   ];
 
@@ -770,6 +1058,7 @@ async function setupLLM(existing) {
   // ── API Key ──
   const isLocal = baseURL.includes("localhost") || baseURL.includes("127.0.0.1");
   const isNvidia = baseURL.includes("integrate.api.nvidia.com");
+  const isZingPlay = baseURL.includes("chat.zingplay.com");
   let apiKey;
   if (isLocal) {
     log.dim("-> Local server, bo qua API key.");
@@ -777,8 +1066,13 @@ async function setupLLM(existing) {
   } else if (isNvidia && process.env.NVIDIA_API_KEY) {
     log.dim("-> Su dung NVIDIA_API_KEY tu .env");
     apiKey = process.env.NVIDIA_API_KEY;
+  } else if (isZingPlay && process.env.ZINGPLAY_API_KEY) {
+    log.dim("-> Su dung ZINGPLAY_API_KEY tu .env");
+    apiKey = process.env.ZINGPLAY_API_KEY;
   } else {
-    const envHint = isNvidia ? " (hoac dat NVIDIA_API_KEY trong .env)" : "";
+    let envHint = "";
+    if (isNvidia) envHint = " (hoac dat NVIDIA_API_KEY trong .env)";
+    else if (isZingPlay) envHint = " (hoac dat ZINGPLAY_API_KEY trong .env)";
     apiKey = await ask(`API Key${envHint}`) || "not-needed";
   }
 
@@ -968,31 +1262,221 @@ async function designBot(llm) {
 }
 
 // ============================================================
-//  STEP 4: Review & Save
+//  Skill selection
 // ============================================================
-async function reviewAndSave(cfg) {
-  log.step(4, 4, "Review & Lưu");
+
+/** Interactive multi-select for skills. Returns array of selected skill names. */
+async function setupSkills(existingSkills) {
+  const available = discoverSkills();
+  if (available.length === 0) {
+    log.warn("Không tìm thấy skills nào trong skills/");
+    return [];
+  }
+
+  const defaults = existingSkills || available.map((s) => s.name);
+  console.log(`\n  ${c.yellow}?${c.reset} Chọn skills cho bot (nhập số, cách bằng dấu phẩy):`);
+  available.forEach((s, i) => {
+    const checked = defaults.includes(s.name) ? `${c.green}[x]${c.reset}` : `${c.dim}[ ]${c.reset}`;
+    const label = s.emoji ? `${s.emoji} ${s.name}` : s.name;
+    console.log(`    ${checked} ${c.cyan}${i + 1})${c.reset} ${label} ${c.dim}— ${s.description}${c.reset}`);
+  });
+  log.dim("  Enter = giữ mặc định, 0 = bỏ tất cả");
+
+  const input = await ask(`Chọn (1-${available.length})`, defaults.map((_, i) => i + 1).join(","));
+  if (input.trim() === "0") return [];
+
+  const nums = input.split(/[,\s]+/).map(Number).filter((n) => n >= 1 && n <= available.length);
+  if (nums.length === 0) return defaults;
+  return [...new Set(nums.map((n) => available[n - 1].name))];
+}
+
+// ============================================================
+//  Review & Save bot profile
+// ============================================================
+
+/** Displays bot summary. Returns the saved profile. */
+async function reviewAndSave(cfg, existingId) {
+  log.info("Review & Lưu");
   console.log();
   const masked = cfg.telegram.token.slice(0, 8) + "••••" + cfg.telegram.token.slice(-4);
+  const skillNames = cfg.bot.skills || [];
   console.log(`  ${c.bold}${"═".repeat(56)}${c.reset}`);
   console.log(`  ${c.cyan}Telegram:${c.reset}  ${masked}`);
   console.log(`  ${c.cyan}LLM:${c.reset}       ${cfg.llm.baseURL}`);
   console.log(`  ${c.cyan}Model:${c.reset}     ${cfg.llm.model}`);
   console.log(`  ${c.cyan}Bot:${c.reset}       ${cfg.bot.name} — ${cfg.bot.description}`);
+  console.log(`  ${c.cyan}Skills:${c.reset}    ${skillNames.length > 0 ? skillNames.join(", ") : "none"}`);
   console.log(`  ${c.cyan}Pipeline:${c.reset}  temp=${cfg.bot.pipeline?.temperature}, tokens=${cfg.bot.pipeline?.max_tokens}`);
   console.log(`  ${"═".repeat(56)}`);
 
-  saveConfig(cfg);
-  log.ok(`ClawFather config: ${CONFIG_FILE}`);
+  const id = existingId || slugify(cfg.bot.name);
+  const now = new Date().toISOString();
+  const profile = {
+    id,
+    createdAt: cfg.createdAt || now,
+    updatedAt: now,
+    telegram: cfg.telegram,
+    llm: cfg.llm,
+    bot: cfg.bot,
+  };
 
-  const picoConfigPath = writePicoClawConfig(cfg);
+  saveBot(profile);
+  log.ok(`Bot profile: ${path.join(BOTS_DIR, id + ".json")}`);
+
+  const picoConfigPath = writePicoClawConfig(profile);
   log.ok(`PicoClaw config: ${picoConfigPath}`);
+
+  return profile;
 }
 
 // ============================================================
 //  Bot Runner — delegates to PicoClaw gateway
 // ============================================================
 // runPicoClawGateway() is defined above in the PicoClaw section
+
+// ============================================================
+//  Multi-bot management
+// ============================================================
+
+/** One-time migration from legacy single-bot config.json to data/bots/ */
+async function migrateFromLegacyConfig() {
+  const legacy = loadConfig();
+  if (!legacy?.bot?.system_prompt) return;
+  if (loadAllBots().length > 0) return;
+
+  log.info("Di chuyển config cũ sang multi-bot...");
+  const id = slugify(legacy.bot.name);
+  const now = new Date().toISOString();
+  // Set skills to all available if not present
+  if (!legacy.bot.skills) {
+    legacy.bot.skills = discoverSkills().map((s) => s.name);
+  }
+  const profile = {
+    id, createdAt: now, updatedAt: now,
+    telegram: legacy.telegram,
+    llm: legacy.llm,
+    bot: legacy.bot,
+  };
+  saveBot(profile);
+  log.ok(`Đã chuyển "${profile.bot.name}" -> data/bots/${id}.json`);
+
+  // Migrate workspace
+  const oldWork = path.join(os.homedir(), ".picoclaw", "workspace");
+  const newWork = path.join(PICOCLAW_WORKSPACES_DIR, id);
+  if (fs.existsSync(oldWork) && !fs.existsSync(newWork)) {
+    fs.mkdirSync(path.dirname(newWork), { recursive: true });
+    fs.renameSync(oldWork, newWork);
+    log.ok(`Workspace -> ${newWork}`);
+  }
+
+  // Backup legacy config
+  const backupPath = CONFIG_FILE + ".bak";
+  fs.renameSync(CONFIG_FILE, backupPath);
+  log.dim(`Config cũ lưu tại: ${backupPath}`);
+}
+
+/** Displays formatted list of all bots */
+function displayBotList(bots) {
+  console.log(`\n  ${c.bold}${"═".repeat(60)}${c.reset}`);
+  console.log(`  ${c.bold}  Bot Profiles (${bots.length})${c.reset}`);
+  console.log(`  ${"─".repeat(60)}`);
+  bots.forEach((b, i) => {
+    const masked = b.telegram.token.slice(0, 8) + "••••" + b.telegram.token.slice(-4);
+    const skillCount = b.bot.skills?.length ?? 0;
+    console.log(`  ${c.cyan}${i + 1})${c.reset} ${c.bold}${b.bot.name}${c.reset}`);
+    console.log(`     ${c.dim}ID: ${b.id} | Model: ${b.llm.model} | Skills: ${skillCount} | Token: ${masked}${c.reset}`);
+  });
+  console.log(`  ${"═".repeat(60)}\n`);
+}
+
+/** Pick a bot from list and launch it */
+async function selectAndRunBot(bots, picoClawPath) {
+  let profile;
+  if (bots.length === 1) {
+    profile = bots[0];
+    log.info(`Bot duy nhất: "${profile.bot.name}"`);
+  } else {
+    profile = await chooseBotFromList(bots, "Chọn bot để chạy:");
+  }
+  rl.close();
+  runBot(profile, picoClawPath);
+}
+
+/** Create a new bot, optionally cloning LLM/Telegram from existing */
+async function createNewBot(bots, picoClawPath) {
+  let existingTelegram = null;
+  let existingLlm = null;
+
+  if (bots.length > 0) {
+    const cloneLabels = bots.map(
+      (b) => `Sao chép từ "${b.bot.name}" (LLM + Telegram)`,
+    );
+    cloneLabels.push("Nhập mới từ đầu");
+    const idx = await choose("Sao chép cài đặt từ bot có sẵn?", cloneLabels);
+    if (idx < bots.length) {
+      existingTelegram = bots[idx].telegram.token;
+      existingLlm = bots[idx].llm;
+    }
+  }
+
+  const token = await setupTelegram(existingTelegram);
+  const llm = await setupLLM(existingLlm);
+  const botData = await designBot(llm);
+  if (!botData) { log.warn("Hủy."); return null; }
+  botData.skills = await setupSkills();
+
+  const cfg = { telegram: { token }, llm, bot: botData };
+  const profile = await reviewAndSave(cfg);
+
+  if (await confirm("Chạy bot ngay?")) {
+    rl.close();
+    runBot(profile, picoClawPath);
+    return profile;
+  }
+  return profile;
+}
+
+/** Pick a bot and edit its telegram, LLM, design, or skills */
+async function editExistingBot(bots) {
+  const profile = await chooseBotFromList(bots, "Chọn bot để sửa:");
+
+  const action = await choose("Chỉnh sửa gì:", [
+    "Telegram token",
+    "LLM settings",
+    "Bot design (AI redesign)",
+    "Skills",
+    "Quay lại",
+  ]);
+
+  if (action === 4) return null;
+
+  if (action === 0) {
+    profile.telegram.token = await setupTelegram(profile.telegram.token);
+  } else if (action === 1) {
+    profile.llm = await setupLLM(profile.llm);
+  } else if (action === 2) {
+    const newBot = await designBot(profile.llm);
+    if (!newBot) { log.warn("Hủy."); return null; }
+    newBot.skills = profile.bot.skills;
+    profile.bot = newBot;
+  } else if (action === 3) {
+    profile.bot.skills = await setupSkills(profile.bot.skills);
+  }
+
+  return reviewAndSave(
+    { telegram: profile.telegram, llm: profile.llm, bot: profile.bot, createdAt: profile.createdAt },
+    profile.id,
+  );
+}
+
+/** Pick a bot and delete it */
+async function deleteExistingBot(bots) {
+  const profile = await chooseBotFromList(bots, "Chọn bot để xóa:");
+  if (await confirm(`Xóa "${profile.bot.name}"?`, false)) {
+    await deleteBot(profile.id);
+    log.ok(`Đã xóa bot "${profile.bot.name}".`);
+  }
+}
 
 // ============================================================
 //  MAIN
@@ -1008,49 +1492,52 @@ async function main() {
   }
   console.log();
 
-  const existing = loadConfig();
+  await migrateFromLegacyConfig();
+  let bots = loadAllBots();
 
-  if (existing?.telegram?.token && existing?.llm?.baseURL && existing?.bot?.system_prompt) {
-    log.ok(`Config tìm thấy: "${existing.bot.name}" | ${existing.llm.model}`);
-
-    const action = await choose("Bạn muốn:", [
-      "🚀 Chạy bot ngay",
-      "🆕 Tạo bot mới (giữ LLM + Telegram config)",
-      "⚙️  Setup lại toàn bộ",
-      "🗑️  Xóa PicoClaw config",
-      "❌ Thoát",
-    ]);
-
-    if (action === 0) { rl.close(); return runBot(existing, picoClawPath); }
-    if (action === 1) {
-      const b = await designBot(existing.llm);
-      if (!b) { log.warn("Hủy."); rl.close(); return; }
-      existing.bot = b;
-      await reviewAndSave(existing);
-      if (await confirm("🚀 Chạy bot ngay?")) { rl.close(); return runBot(existing, picoClawPath); }
-      rl.close(); return;
-    }
-    if (action === 3) {
-      if (await confirm("Xóa ~/.picoclaw/config.json và workspace?", false)) {
-        await removePicoClawConfig();
-      }
-      rl.close(); return;
-    }
-    if (action === 4) { rl.close(); return; }
+  if (bots.length === 0) {
+    log.info("Chưa có bot nào. Hãy tạo bot đầu tiên!");
+    await createNewBot(bots, picoClawPath);
+    rl.close();
+    return;
   }
 
-  // Full wizard
-  const token = await setupTelegram(existing?.telegram?.token);
-  const llm = await setupLLM(existing?.llm);
-  const b = await designBot(llm);
-  if (!b) { log.warn("Không tạo bot."); rl.close(); return; }
+  // Main menu loop
+  while (true) {
+    bots = loadAllBots();
+    if (bots.length === 0) {
+      log.info("Không còn bot nào.");
+      if (await confirm("Tạo bot mới?")) {
+        await createNewBot(bots, picoClawPath);
+      }
+      rl.close();
+      return;
+    }
 
-  const cfg = { telegram: { token }, llm, bot: b };
-  await reviewAndSave(cfg);
+    log.ok(`Tìm thấy ${bots.length} bot profile(s).`);
+    const action = await choose("Bạn muốn:", [
+      "Chạy bot",
+      "Tạo bot mới",
+      "Chỉnh sửa bot",
+      "Xem danh sách bot",
+      "Xóa bot",
+      "Xóa PicoClaw config",
+      "Thoát",
+    ]);
 
-  if (await confirm("🚀 Chạy bot ngay?")) { rl.close(); return runBot(cfg, picoClawPath); }
-  log.ok("Chạy lại: node clawfather.js");
-  rl.close();
+    if (action === 0) { await selectAndRunBot(bots, picoClawPath); return; }
+    if (action === 1) { await createNewBot(bots, picoClawPath); continue; }
+    if (action === 2) { await editExistingBot(bots); continue; }
+    if (action === 3) { displayBotList(bots); continue; }
+    if (action === 4) { await deleteExistingBot(bots); continue; }
+    if (action === 5) {
+      if (await confirm("Xóa ~/.picoclaw/config.json?", false)) {
+        await removePicoClawConfig();
+      }
+      continue;
+    }
+    if (action === 6) { rl.close(); return; }
+  }
 }
 
 main().catch((e) => { log.err(e.message); process.exit(1); });
