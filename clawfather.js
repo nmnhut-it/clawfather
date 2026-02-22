@@ -18,7 +18,9 @@ const path = require("path");
 const os = require("os");
 const http = require("http");
 const https = require("https");
+const crypto = require("crypto");
 const { spawn, execSync } = require("child_process");
+require("dotenv").config();
 const OpenAI = require("openai");
 // const { Bot } = require("grammy"); // Reserved for future context capture
 
@@ -299,78 +301,172 @@ function writePicoClawConfig(cfg) {
   const configPath = path.join(picoDir, "config.json");
   fs.writeFileSync(configPath, JSON.stringify(buildPicoClawConfig(cfg), null, 2));
 
-  fs.writeFileSync(path.join(workDir, "AGENTS.md"), buildAgentsMd(cfg.bot));
-  writeTelegramContextSkill(workDir, TOOL_SERVER_PORT);
+  fs.writeFileSync(path.join(workDir, "AGENTS.md"), buildAgentsMd(cfg.bot, workDir));
+  writePersonalAssistantSkills(workDir);
   return configPath;
 }
 
+/** Removes PicoClaw config and workspace directory */
+async function removePicoClawConfig() {
+  const picoDir = path.join(os.homedir(), ".picoclaw");
+  const configPath = path.join(picoDir, "config.json");
+  const workDir = path.join(picoDir, "workspace");
+
+  let removed = false;
+
+  if (fs.existsSync(configPath)) {
+    fs.unlinkSync(configPath);
+    log.ok(`Đã xóa: ${configPath}`);
+    removed = true;
+  }
+
+  if (fs.existsSync(workDir)) {
+    fs.rmSync(workDir, { recursive: true, force: true });
+    log.ok(`Đã xóa: ${workDir}`);
+    removed = true;
+  }
+
+  if (!removed) {
+    log.info("Không có gì để xóa.");
+  }
+
+  return removed;
+}
+
 /** Builds AGENTS.md content from bot design data */
-function buildAgentsMd(bot) {
+function buildAgentsMd(bot, workDir) {
   const lines = [`# Agent: ${bot.name}`, ""];
   lines.push(bot.system_prompt || "");
   if (bot.features?.length) {
-    lines.push("", "## Skills");
+    lines.push("", "## Capabilities");
     bot.features.forEach((f) => lines.push(`- ${f}`));
   }
+
+  // Personal Assistant Skills
   lines.push(
     "",
-    "## Telegram Context (IMPORTANT)",
-    "Every message from Telegram starts with `[chat_id:NUMBER]`.",
-    "You MUST ALWAYS run this command before responding:",
-    "```",
-    `exec curl -s http://${TOOL_SERVER_HOST}:${TOOL_SERVER_PORT}/telegram/context?chat_id=CHAT_ID`,
-    "```",
-    "Replace CHAT_ID with the number from the prefix.",
-    "If `has_reply` is true, use `reply_to.text` as quoted context in your response.",
+    "## Personal Assistant Skills",
+    "",
+    "### 👔 Boss Advisor",
+    "Tư vấn cách trả lời tin nhắn sếp chuyên nghiệp.",
+    "- Frameworks: BLUF, STAR, SCQA, Pyramid Principle",
+    "- Nhớ style của từng sếp trong `boss-profile.json`",
+    "- User forward tin nhắn sếp → Bot gợi ý cách reply",
+    "",
+    "### ⏰ Reminder",
+    "Đặt nhắc nhở sử dụng PicoClaw cron.",
+    "- Một lần: \"nhắc tôi sau 30 phút\"",
+    "- Định kỳ: \"mỗi sáng 8h nhắc check email\"",
+    "- Xem: \"list reminders\"",
+    "",
+    "### 📧 Email Draft",
+    "Soạn email trong Gmail hoặc Outlook Web.",
+    "- Mở browser với nội dung đã điền sẵn",
+    "- Kết hợp Boss Advisor để soạn chuyên nghiệp",
+    "- User review và bấm Send thủ công",
   );
+
+  // File paths reference
+  const bossFile = path.join(workDir, "boss-profile.json");
+  const learningFile = path.join(workDir, "learning-log.json");
+  lines.push(
+    "",
+    "## Data Files",
+    `- Boss profiles: \`${bossFile}\``,
+    `- Learning log: \`${learningFile}\``,
+    "",
+    "## 🧠 Self-Learning",
+    "Bot tự học từ feedback của user:",
+    "- User nói 'sếp khen', 'hay đấy' → Ghi nhận thành công",
+    "- User nói 'sếp không hài lòng', 'fail' → Học để tránh lặp lại",
+    "- Sau mỗi tư vấn, hỏi kết quả để cải thiện",
+    "- Phân tích pattern: sếp nào thích framework gì, thời điểm nào tốt",
+  );
+
   return lines.join("\n") + "\n";
 }
 
+// ── Personal Assistant Skills ────────────────────────────────
+// Skills are stored in clawfather/skills/ and copied to workspace
+// Uses MD5 hash to detect changes and only update when needed
+
+const SKILLS_SRC_DIR = path.join(__dirname, "skills");
+const SKILL_NAMES = ["boss-advisor", "reminder", "email-draft"];
+const SKILLS_HASH_FILE = "skills-hash.json";
+
+/** Calculates MD5 hash of file content */
+function fileHash(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  const content = fs.readFileSync(filePath);
+  return crypto.createHash("md5").update(content).digest("hex");
+}
+
 /**
- * Writes skills/telegram-context/SKILL.md to PicoClaw workspace.
- * Instructs the agent how to fetch reply context via exec curl.
+ * Copies skill files from clawfather/skills/ to workspace/skills/
+ * Only copies if hash changed. Initializes data files if needed.
  */
-function writeTelegramContextSkill(workspaceDir, port) {
-  const skillDir = path.join(workspaceDir, "skills", "telegram-context");
-  fs.mkdirSync(skillDir, { recursive: true });
+function writePersonalAssistantSkills(workspaceDir) {
+  const skillsDestDir = path.join(workspaceDir, "skills");
+  const hashFilePath = path.join(workspaceDir, SKILLS_HASH_FILE);
 
-  const endpoint = `http://${TOOL_SERVER_HOST}:${port}/telegram/context`;
-  const content = [
-    "---",
-    "name: telegram-context",
-    "description: Fetch reply/quoted message context for Telegram chats.",
-    'metadata: {"nanobot":{"emoji":"💬","requires":{"bins":["curl"]}}}',
-    "---",
-    "",
-    "# Telegram Context",
-    "",
-    "## When to use (ALWAYS)",
-    "",
-    "Every Telegram message starts with `[chat_id:NUMBER]`.",
-    "You MUST run this command BEFORE responding to any Telegram message.",
-    "",
-    "## Quick start",
-    "",
-    "```bash",
-    `exec curl -s "${endpoint}?chat_id=CHAT_ID"`,
-    "```",
-    "",
-    "Replace `CHAT_ID` with the number from the `[chat_id:NUMBER]` prefix.",
-    "",
-    "## Response format",
-    "",
-    "```json",
-    '{ "has_reply": true, "message_id": 123, "sender": "username",',
-    '  "reply_to": { "text": "quoted message", "sender": "original_sender" } }',
-    "```",
-    "",
-    "- `has_reply: false` — no quoted message, respond normally.",
-    "- `has_reply: true` — user is replying to a previous message.",
-    "  Use `reply_to.text` as context when crafting your response.",
-    "",
-  ].join("\n");
+  // Load existing hashes
+  let storedHashes = {};
+  if (fs.existsSync(hashFilePath)) {
+    try {
+      storedHashes = JSON.parse(fs.readFileSync(hashFilePath, "utf-8"));
+    } catch { /* ignore parse errors */ }
+  }
 
-  fs.writeFileSync(path.join(skillDir, "SKILL.md"), content);
+  const newHashes = {};
+  let updatedCount = 0;
+
+  for (const skillName of SKILL_NAMES) {
+    const srcDir = path.join(SKILLS_SRC_DIR, skillName);
+    const destDir = path.join(skillsDestDir, skillName);
+    fs.mkdirSync(destDir, { recursive: true });
+
+    const srcFile = path.join(srcDir, "SKILL.md");
+    const destFile = path.join(destDir, "SKILL.md");
+
+    if (fs.existsSync(srcFile)) {
+      const srcHash = fileHash(srcFile);
+      newHashes[skillName] = srcHash;
+
+      // Only copy if hash changed or file doesn't exist
+      if (srcHash !== storedHashes[skillName] || !fs.existsSync(destFile)) {
+        fs.copyFileSync(srcFile, destFile);
+        updatedCount++;
+        log.dim(`  Skill updated: ${skillName}`);
+      }
+    }
+  }
+
+  // Save new hashes
+  fs.writeFileSync(hashFilePath, JSON.stringify(newHashes, null, 2));
+
+  if (updatedCount > 0) {
+    log.ok(`Skills: ${updatedCount} updated`);
+  } else {
+    log.dim("  Skills: up to date");
+  }
+
+  // Initialize data files for boss-advisor
+  const bossProfileFile = path.join(workspaceDir, "boss-profile.json");
+  const learningLogFile = path.join(workspaceDir, "learning-log.json");
+
+  if (!fs.existsSync(bossProfileFile)) {
+    fs.writeFileSync(bossProfileFile, JSON.stringify({
+      bosses: [],
+      interactions: []
+    }, null, 2));
+  }
+
+  if (!fs.existsSync(learningLogFile)) {
+    fs.writeFileSync(learningLogFile, JSON.stringify({
+      lessons: [],
+      patterns: {}
+    }, null, 2));
+  }
 }
 
 /** Spawns `picoclaw gateway` with tool server for context lookups */
@@ -647,6 +743,7 @@ async function setupLLM(existing) {
     "llama.cpp        → http://localhost:8080/v1",
     "text-gen-webui   → http://localhost:5000/v1",
     "OpenRouter       → https://openrouter.ai/api/v1",
+    "NVIDIA NIM       → https://integrate.api.nvidia.com/v1",
     "Tự nhập URL khác",
   ]);
 
@@ -657,6 +754,7 @@ async function setupLLM(existing) {
     "http://localhost:8080/v1",
     "http://localhost:5000/v1",
     "https://openrouter.ai/api/v1",
+    "https://integrate.api.nvidia.com/v1",
     "",
   ];
 
@@ -671,12 +769,17 @@ async function setupLLM(existing) {
 
   // ── API Key ──
   const isLocal = baseURL.includes("localhost") || baseURL.includes("127.0.0.1");
+  const isNvidia = baseURL.includes("integrate.api.nvidia.com");
   let apiKey;
   if (isLocal) {
-    log.dim("→ Local server, bỏ qua API key.");
+    log.dim("-> Local server, bo qua API key.");
     apiKey = "not-needed";
+  } else if (isNvidia && process.env.NVIDIA_API_KEY) {
+    log.dim("-> Su dung NVIDIA_API_KEY tu .env");
+    apiKey = process.env.NVIDIA_API_KEY;
   } else {
-    apiKey = await ask("API Key") || "not-needed";
+    const envHint = isNvidia ? " (hoac dat NVIDIA_API_KEY trong .env)" : "";
+    apiKey = await ask(`API Key${envHint}`) || "not-needed";
   }
 
   // ── List models ──
@@ -914,6 +1017,7 @@ async function main() {
       "🚀 Chạy bot ngay",
       "🆕 Tạo bot mới (giữ LLM + Telegram config)",
       "⚙️  Setup lại toàn bộ",
+      "🗑️  Xóa PicoClaw config",
       "❌ Thoát",
     ]);
 
@@ -926,7 +1030,13 @@ async function main() {
       if (await confirm("🚀 Chạy bot ngay?")) { rl.close(); return runBot(existing, picoClawPath); }
       rl.close(); return;
     }
-    if (action === 3) { rl.close(); return; }
+    if (action === 3) {
+      if (await confirm("Xóa ~/.picoclaw/config.json và workspace?", false)) {
+        await removePicoClawConfig();
+      }
+      rl.close(); return;
+    }
+    if (action === 4) { rl.close(); return; }
   }
 
   // Full wizard
