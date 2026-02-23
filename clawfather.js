@@ -22,7 +22,7 @@ const crypto = require("crypto");
 const { spawn, execSync } = require("child_process");
 require("dotenv").config();
 const OpenAI = require("openai");
-const { Parser } = require("htmlparser2");
+const { LLM_PROXY_PORT, LLM_PROXY_HOST, startLLMProxy } = require("./llm-proxy");
 // const { Bot } = require("grammy"); // Reserved for future context capture
 
 // ── ANSI Colors ─────────────────────────────────────────────
@@ -61,11 +61,14 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // ── Multi-bot storage ───────────────────────────────────
 const BOTS_DIR = path.join(DATA_DIR, "bots");
-const PICOCLAW_WORKSPACES_DIR = path.join(os.homedir(), ".picoclaw", "workspaces");
+const PICOCLAW_WORKSPACE_DIR = path.join(os.homedir(), ".picoclaw", "workspace");
 
 // ── PicoClaw ────────────────────────────────────────────
 const PICOCLAW_BIN_DIR = path.join(DATA_DIR, "bin");
 const PICOCLAW_RELEASES_URL = "https://api.github.com/repos/sipeed/picoclaw/releases/latest";
+const DEFAULT_CONTEXT_WINDOW = 131072;
+const DEFAULT_WEB_MAX_RESULTS = 5;
+const DEFAULT_CRON_TIMEOUT_MINUTES = 5;
 
 /** Maps `${platform}-${arch}` to GitHub release asset name */
 const PICOCLAW_ASSETS = {
@@ -130,17 +133,10 @@ function saveBot(profile) {
   );
 }
 
-/** Removes bot profile JSON and optionally its workspace */
+/** Removes bot profile JSON */
 async function deleteBot(botId) {
   const filePath = path.join(BOTS_DIR, `${botId}.json`);
   if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  const workDir = path.join(PICOCLAW_WORKSPACES_DIR, botId);
-  if (fs.existsSync(workDir)) {
-    if (await confirm(`Xóa workspace "${botId}"?`, false)) {
-      fs.rmSync(workDir, { recursive: true, force: true });
-      log.ok(`Đã xóa workspace: ${workDir}`);
-    }
-  }
 }
 
 /** Displays numbered list of bots, returns the selected profile */
@@ -334,79 +330,75 @@ async function ensurePicoClaw() {
 
 // ── PicoClaw config generation ──────────────────────────
 
-/** Builds the PicoClaw config object from bot profile (cfg must include .id) */
+/** Builds PicoClaw config. Uses providers format (v0.1.2 compatible) + LLM proxy for Qwen tool calls. */
 function buildPicoClawConfig(cfg) {
-  const workspace = cfg.id
-    ? `~/.picoclaw/workspaces/${cfg.id}`
-    : "~/.picoclaw/workspace";
+  const maxTokens = Math.max(cfg.bot.pipeline?.max_tokens || DEFAULT_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW);
   return {
     agents: {
       defaults: {
-        workspace,
+        workspace: "~/.picoclaw/workspace",
         restrict_to_workspace: false,
         provider: "openai",
         model: cfg.llm.model,
-        max_tokens: cfg.bot.pipeline?.max_tokens || 8192,
+        max_tokens: maxTokens,
         temperature: cfg.bot.pipeline?.temperature ?? 0.7,
         max_tool_iterations: 20,
+      },
+    },
+    providers: {
+      openai: {
+        api_key: cfg.llm.apiKey || "not-needed",
+        api_base: `http://${LLM_PROXY_HOST}:${LLM_PROXY_PORT}/v1`,
       },
     },
     channels: {
       telegram: {
         enabled: true,
         token: cfg.telegram.token,
-        proxy: "",
         allow_from: [],
       },
     },
-    providers: {
-      openai: {
-        api_key: cfg.llm.apiKey || "",
-        // Route through LLM proxy to parse text-based tool calls
-        api_base: `http://${LLM_PROXY_HOST}:${LLM_PROXY_PORT}/v1`,
+    tools: {
+      web: {
+        duckduckgo: { enabled: true, max_results: DEFAULT_WEB_MAX_RESULTS },
+      },
+      cron: {
+        exec_timeout_minutes: DEFAULT_CRON_TIMEOUT_MINUTES,
       },
     },
   };
 }
 
-/** Writes ~/.picoclaw/config.json, workspace AGENTS.md, and skills */
+/** Writes ~/.picoclaw/config.json, workspace AGENT.md, skills, and standard files */
 function writePicoClawConfig(cfg) {
   const picoDir = path.join(os.homedir(), ".picoclaw");
-  const workDir = cfg.id
-    ? path.join(PICOCLAW_WORKSPACES_DIR, cfg.id)
-    : path.join(picoDir, "workspace");
-  fs.mkdirSync(workDir, { recursive: true });
+  fs.mkdirSync(PICOCLAW_WORKSPACE_DIR, { recursive: true });
 
   const configPath = path.join(picoDir, "config.json");
   fs.writeFileSync(configPath, JSON.stringify(buildPicoClawConfig(cfg), null, 2));
 
   const skills = cfg.bot.skills || discoverSkills().map((s) => s.name);
-  fs.writeFileSync(path.join(workDir, "AGENTS.md"), buildAgentsMd(cfg.bot, workDir, skills));
-  writePersonalAssistantSkills(workDir, skills);
+  fs.writeFileSync(path.join(PICOCLAW_WORKSPACE_DIR, "AGENTS.md"), buildAgentsMd(cfg.bot, skills));
+  writePersonalAssistantSkills(PICOCLAW_WORKSPACE_DIR, skills);
+  scaffoldWorkspaceFiles(PICOCLAW_WORKSPACE_DIR, cfg.bot);
   return configPath;
 }
 
-/** Removes PicoClaw config and workspace. If botId given, removes only that workspace. */
-async function removePicoClawConfig(botId) {
+/** Removes PicoClaw config and workspace */
+async function removePicoClawConfig() {
   const picoDir = path.join(os.homedir(), ".picoclaw");
   let removed = false;
 
-  if (!botId) {
-    const configPath = path.join(picoDir, "config.json");
-    if (fs.existsSync(configPath)) {
-      fs.unlinkSync(configPath);
-      log.ok(`Đã xóa: ${configPath}`);
-      removed = true;
-    }
+  const configPath = path.join(picoDir, "config.json");
+  if (fs.existsSync(configPath)) {
+    fs.unlinkSync(configPath);
+    log.ok(`Đã xóa: ${configPath}`);
+    removed = true;
   }
 
-  const workDir = botId
-    ? path.join(PICOCLAW_WORKSPACES_DIR, botId)
-    : path.join(picoDir, "workspace");
-
-  if (fs.existsSync(workDir)) {
-    fs.rmSync(workDir, { recursive: true, force: true });
-    log.ok(`Đã xóa: ${workDir}`);
+  if (fs.existsSync(PICOCLAW_WORKSPACE_DIR)) {
+    fs.rmSync(PICOCLAW_WORKSPACE_DIR, { recursive: true, force: true });
+    log.ok(`Đã xóa: ${PICOCLAW_WORKSPACE_DIR}`);
     removed = true;
   }
 
@@ -415,7 +407,7 @@ async function removePicoClawConfig(botId) {
 }
 
 /** Builds AGENTS.md content from bot design data and selected skills */
-function buildAgentsMd(bot, workDir, selectedSkills) {
+function buildAgentsMd(bot, selectedSkills) {
   const lines = [`# Agent: ${bot.name}`, ""];
   lines.push(bot.system_prompt || "");
   if (bot.features?.length) {
@@ -423,34 +415,23 @@ function buildAgentsMd(bot, workDir, selectedSkills) {
     bot.features.forEach((f) => lines.push(`- ${f}`));
   }
 
-  // Dynamic skills section from selected skills
+  // Skills: inline full SKILL.md content so the agent knows exactly how to use each skill
   if (selectedSkills?.length) {
-    lines.push("", "## Personal Assistant Skills", "");
+    lines.push("", "## Skills", "");
+    lines.push("You have the following skills. Use the appropriate tools (read_file, write_file, exec, etc.) as described in each skill.", "");
     for (const skillName of selectedSkills) {
       const meta = parseSkillMeta(skillName);
       if (!meta) continue;
       const heading = meta.emoji ? `### ${meta.emoji} ${meta.name}` : `### ${meta.name}`;
-      lines.push(heading, meta.description, "");
+      lines.push(heading, "");
+      const body = readSkillContent(skillName);
+      if (body) {
+        lines.push(body, "");
+      } else {
+        lines.push(meta.description, "");
+      }
+      lines.push("---", "");
     }
-  }
-
-  // Boss-advisor specific sections
-  const hasBossAdvisor = selectedSkills?.includes("boss-advisor");
-  if (hasBossAdvisor) {
-    const bossFile = path.join(workDir, "boss-profile.json");
-    const learningFile = path.join(workDir, "learning-log.json");
-    lines.push(
-      "## Data Files",
-      `- Boss profiles: \`${bossFile}\``,
-      `- Learning log: \`${learningFile}\``,
-      "",
-      "## Self-Learning",
-      "Bot tự học từ feedback của user:",
-      "- User nói 'sếp khen', 'hay đấy' -> Ghi nhận thành công",
-      "- User nói 'sếp không hài lòng', 'fail' -> Học để tránh lặp lại",
-      "- Sau mỗi tư vấn, hỏi kết quả để cải thiện",
-      "- Phân tích pattern: sếp nào thích framework gì, thời điểm nào tốt",
-    );
   }
 
   return lines.join("\n") + "\n";
@@ -490,6 +471,15 @@ function parseSkillMeta(skillName) {
     } catch { /* ignore */ }
   }
   return { name, description, emoji };
+}
+
+/** Reads SKILL.md body content (everything after YAML front-matter) */
+function readSkillContent(skillName) {
+  const skillFile = path.join(SKILLS_SRC_DIR, skillName, "SKILL.md");
+  if (!fs.existsSync(skillFile)) return "";
+  const content = fs.readFileSync(skillFile, "utf-8");
+  const fmEnd = content.match(/^---\n[\s\S]*?\n---\n?/);
+  return fmEnd ? content.slice(fmEnd[0].length).trim() : content.trim();
 }
 
 /** Auto-discovers all skills from skills/ directory. Returns [{ name, description, emoji }] */
@@ -572,20 +562,283 @@ function writePersonalAssistantSkills(workspaceDir, selectedSkills) {
     log.dim("  Skills: up to date");
   }
 
-  // Initialize data files for boss-advisor if selected
-  if (selectedSkills.includes("boss-advisor")) {
-    const bossProfileFile = path.join(workspaceDir, "boss-profile.json");
-    const learningLogFile = path.join(workspaceDir, "learning-log.json");
-    if (!fs.existsSync(bossProfileFile)) {
-      fs.writeFileSync(bossProfileFile, JSON.stringify({
-        bosses: [], interactions: [],
-      }, null, 2));
+}
+
+// ── Workspace scaffolding ────────────────────────────────────
+// Standard PicoClaw workspace files: TOOLS.md, IDENTITY.md, SOUL.md, USER.md, HEARTBEAT.md, memory/
+
+/** Builds TOOLS.md documenting all PicoClaw built-in tools */
+function buildToolsMd() {
+  return `# PicoClaw Tools Reference
+
+All available tools for the AI agent. Use these tools to accomplish tasks.
+
+---
+
+## File System
+
+### read_file
+Read the contents of a file.
+\`\`\`
+read_file("path/to/file.txt")
+\`\`\`
+- Path is relative to workspace root
+- Returns full file contents as text
+- Returns error if file does not exist
+
+### write_file
+Create or overwrite a file with new content.
+\`\`\`
+write_file("path/to/file.txt", "content here")
+\`\`\`
+- Creates parent directories automatically
+- Overwrites existing file without warning
+- Use for creating new files or full replacements
+
+### edit_file
+Edit an existing file by replacing a text segment.
+\`\`\`
+edit_file("path/to/file.txt", "old text", "new text")
+\`\`\`
+- Finds first occurrence of "old text" and replaces with "new text"
+- Fails if "old text" is not found
+- Use for surgical edits without rewriting the whole file
+
+### append_file
+Append content to the end of a file.
+\`\`\`
+append_file("path/to/file.txt", "new line at end")
+\`\`\`
+- Creates file if it does not exist
+- Does not add newline automatically — include \\n if needed
+
+### list_dir
+List files and directories at a given path.
+\`\`\`
+list_dir("path/to/dir")
+\`\`\`
+- Returns file and directory names
+- Use \`list_dir(".")\` for workspace root
+
+---
+
+## Shell Execution
+
+### exec
+Execute a shell command.
+\`\`\`
+exec command_string
+\`\`\`
+- Runs in the workspace directory
+- Returns stdout + stderr
+- Supports pipes, redirects, and chaining
+- Cross-platform: use platform-appropriate commands
+
+**Common patterns:**
+\`\`\`
+exec date                          # Current date/time
+exec curl -s "https://..."         # HTTP requests
+exec ./skills/email-draft/open-url.sh "URL"  # Open URL in browser
+\`\`\`
+
+---
+
+## Web
+
+### web_search
+Search the internet using DuckDuckGo or Brave.
+\`\`\`
+web_search("search query here")
+\`\`\`
+- Returns search result summaries with titles, URLs, snippets
+- Use for current events, facts, documentation lookups
+- Keep queries concise and specific
+
+### web_fetch
+Fetch content from a URL.
+\`\`\`
+web_fetch("https://example.com/page")
+\`\`\`
+- Returns page content as text (HTML stripped)
+- Use for reading articles, API responses, documentation
+- Respects timeouts — very large pages may be truncated
+
+---
+
+## Communication
+
+### message
+Send a message to the user proactively.
+\`\`\`
+message("Hello! Here is your update.")
+\`\`\`
+- Delivers via the active channel (Telegram, etc.)
+- Use for notifications, reminders, status updates
+- Supports Markdown formatting
+
+### spawn
+Spawn an async subagent for a background task.
+\`\`\`
+spawn("Summarize the latest news about AI")
+\`\`\`
+- Runs independently — result is sent to user when done
+- Use for long-running tasks that should not block
+- The subagent has access to all the same tools
+
+---
+
+## Scheduling (native cron)
+
+PicoClaw has a built-in cron tool. Use \`picoclaw cron\` commands via exec:
+
+### Add by interval (seconds)
+\`\`\`
+exec picoclaw cron add --name <name> --every <seconds> --message "<msg>" --deliver
+\`\`\`
+
+### Add by cron expression
+\`\`\`
+exec picoclaw cron add --name <name> --cron "<expr>" --message "<msg>" --deliver
+\`\`\`
+
+### List / Remove
+\`\`\`
+exec picoclaw cron list
+exec picoclaw cron remove <id>
+\`\`\`
+
+### Seconds conversion
+- 60 = 1 minute, 300 = 5 minutes, 600 = 10 minutes
+- 1800 = 30 minutes, 3600 = 1 hour, 7200 = 2 hours
+- 86400 = 1 day
+
+### Common cron patterns
+| Pattern | Meaning |
+|---------|---------|
+| \`0 9 * * *\` | Every day at 9:00 |
+| \`0 9 * * 1-5\` | Weekdays at 9:00 |
+| \`0 */2 * * *\` | Every 2 hours |
+| \`30 8 * * 1\` | Monday at 8:30 |
+| \`0 0 1 * *\` | First day of month |
+
+---
+
+## Memory
+
+The agent can persist information across conversations using workspace files:
+- \`memory/MEMORY.md\` — Long-term notes and learned information
+- Use \`read_file\` / \`write_file\` / \`append_file\` to manage memory
+`;
+}
+
+/** Builds IDENTITY.md from bot design data */
+function buildIdentityMd(bot) {
+  const lines = [
+    `# Identity`,
+    ``,
+    `## Name`,
+    bot.name,
+    ``,
+    `## Description`,
+    bot.description || "AI assistant powered by PicoClaw",
+    ``,
+    `## Capabilities`,
+  ];
+  if (bot.features?.length) {
+    bot.features.forEach((f) => lines.push(`- ${f}`));
+  } else {
+    lines.push("- Intelligent conversation", "- Task assistance");
+  }
+  lines.push(
+    ``,
+    `## Welcome Message`,
+    bot.welcome_message || "Xin chào! Tôi có thể giúp gì cho bạn?",
+  );
+  return lines.join("\n") + "\n";
+}
+
+/** Default SOUL.md content */
+const DEFAULT_SOUL_MD = `# Soul
+
+## Personality
+
+- Helpful and friendly
+- Concise and to the point
+- Curious and eager to learn
+- Honest and transparent
+
+## Values
+
+- Accuracy over speed
+- User privacy and safety
+- Transparency in actions
+- Continuous improvement
+`;
+
+/** Default USER.md template */
+const DEFAULT_USER_MD = `# User
+
+Information about user goes here.
+
+## Preferences
+
+- Communication style: (casual/formal)
+- Timezone: (your timezone)
+- Language: (your preferred language)
+
+## Personal Information
+
+- Name: (optional)
+- Location: (optional)
+- Occupation: (optional)
+`;
+
+/** Default HEARTBEAT.md template */
+const DEFAULT_HEARTBEAT_MD = `# Heartbeat Check List
+
+This file contains tasks for the heartbeat service to check periodically.
+
+## Instructions
+
+- Execute ALL tasks listed below. Do NOT skip any task.
+- For simple tasks, respond directly.
+- For complex tasks, use spawn tool to create a subagent.
+- Only respond with HEARTBEAT_OK when ALL tasks are done AND nothing needs attention.
+
+---
+
+Add your heartbeat tasks below this line:
+`;
+
+/**
+ * Scaffolds standard PicoClaw workspace files.
+ * TOOLS.md and IDENTITY.md are always regenerated (code-driven).
+ * SOUL.md, USER.md, HEARTBEAT.md, memory/MEMORY.md are created only if missing.
+ */
+function scaffoldWorkspaceFiles(workDir, bot) {
+  // Always regenerate: TOOLS.md, IDENTITY.md
+  fs.writeFileSync(path.join(workDir, "TOOLS.md"), buildToolsMd());
+  fs.writeFileSync(path.join(workDir, "IDENTITY.md"), buildIdentityMd(bot));
+
+  // Create only if missing: SOUL.md, USER.md, HEARTBEAT.md
+  const conditionalFiles = {
+    "SOUL.md": DEFAULT_SOUL_MD,
+    "USER.md": DEFAULT_USER_MD,
+    "HEARTBEAT.md": DEFAULT_HEARTBEAT_MD,
+  };
+  for (const [fileName, content] of Object.entries(conditionalFiles)) {
+    const filePath = path.join(workDir, fileName);
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, content);
     }
-    if (!fs.existsSync(learningLogFile)) {
-      fs.writeFileSync(learningLogFile, JSON.stringify({
-        lessons: [], patterns: {},
-      }, null, 2));
-    }
+  }
+
+  // memory/MEMORY.md
+  const memoryDir = path.join(workDir, "memory");
+  const memoryFile = path.join(memoryDir, "MEMORY.md");
+  if (!fs.existsSync(memoryFile)) {
+    fs.mkdirSync(memoryDir, { recursive: true });
+    fs.writeFileSync(memoryFile, "# Memory\n\nLong-term notes and learned information.\n");
   }
 }
 
@@ -607,9 +860,15 @@ function runPicoClawGateway(picoClawPath, cfg) {
   console.log(`  ${c.bold}${c.green}${"═".repeat(56)}${c.reset}`);
   console.log();
 
+  // Add picoclaw bin dir to PATH so skill scripts can call bare `picoclaw`
+  const binDir = path.dirname(picoClawPath);
   const child = spawn(picoClawPath, ["gateway"], {
     stdio: "inherit",
-    env: { ...process.env },
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
+      PICOCLAW_BIN: picoClawPath,
+    },
   });
 
   child.on("error", (err) => {
@@ -724,169 +983,6 @@ function startToolServer(contextStore) {
   server.listen(TOOL_SERVER_PORT, TOOL_SERVER_HOST, () => {
     log.ok(`Tool server: http://${TOOL_SERVER_HOST}:${TOOL_SERVER_PORT}`);
   });
-  return server;
-}
-
-// ── LLM Proxy (converts text-based tool calls to OpenAI format) ────
-const LLM_PROXY_PORT = 13580;
-const LLM_PROXY_HOST = "127.0.0.1";
-
-/**
- * Parses Qwen-format tool calls from LLM response content.
- * Format: <function=NAME><parameter=KEY>VALUE</parameter></function>
- * Uses htmlparser2 for robust parsing of malformed XML-like content.
- * Returns { text, toolCalls } where text is content without tool calls.
- */
-function parseQwenToolCalls(content) {
-  if (!content || typeof content !== "string") {
-    return { text: content || "", toolCalls: [] };
-  }
-
-  const toolCalls = [];
-  let currentFunc = null;
-  let currentParam = null;
-
-  const parser = new Parser({
-    onopentag(name) {
-      // htmlparser2 sees <function=write_file> as tag name "function=write_file"
-      if (name.startsWith("function=")) {
-        const funcName = name.slice("function=".length);
-        if (funcName) {
-          currentFunc = { name: funcName, args: {} };
-        }
-      }
-      // Handle <parameter=KEY> - tag name is "parameter=key"
-      if (name.startsWith("parameter=") && currentFunc) {
-        currentParam = name.slice("parameter=".length);
-      }
-    },
-    ontext(text) {
-      if (currentFunc && currentParam) {
-        // Inside a parameter tag - accumulate value
-        const existing = currentFunc.args[currentParam] || "";
-        currentFunc.args[currentParam] = existing + text;
-      }
-    },
-    onclosetag(name) {
-      if (name.startsWith("parameter=")) {
-        // Trim the parameter value
-        if (currentFunc && currentParam) {
-          currentFunc.args[currentParam] = (currentFunc.args[currentParam] || "").trim();
-        }
-        currentParam = null;
-      }
-      if (name.startsWith("function=") && currentFunc) {
-        toolCalls.push({
-          id: `call_${crypto.randomBytes(12).toString("hex")}`,
-          type: "function",
-          function: {
-            name: currentFunc.name,
-            arguments: JSON.stringify(currentFunc.args),
-          },
-        });
-        currentFunc = null;
-      }
-    },
-  }, { decodeEntities: true, lowerCaseTags: true });
-
-  parser.write(content);
-  parser.end();
-
-  // Extract text content (remove tool call blocks)
-  const toolCallPattern = /<function=[\s\S]*?<\/function>|<\/tool_call>/gi;
-  const cleanText = content.replace(toolCallPattern, "").trim();
-
-  return { text: cleanText, toolCalls };
-}
-
-/**
- * Transforms LLM response by parsing text-based tool calls.
- * Modifies choices[].message to include tool_calls array if found.
- */
-function transformLLMResponse(responseData) {
-  if (!responseData?.choices) return responseData;
-
-  for (const choice of responseData.choices) {
-    const msg = choice.message;
-    if (!msg?.content) continue;
-
-    const { text, toolCalls } = parseQwenToolCalls(msg.content);
-
-    if (toolCalls.length > 0) {
-      msg.content = text || null;
-      msg.tool_calls = toolCalls;
-      log.info(`LLM Proxy: Parsed ${toolCalls.length} tool call(s)`);
-    }
-  }
-
-  return responseData;
-}
-
-/**
- * Starts the LLM proxy server that intercepts and transforms responses.
- * Forwards requests to the actual LLM endpoint, parses tool calls from
- * text content, and converts them to OpenAI-style tool_calls format.
- */
-function startLLMProxy(targetBaseURL, apiKey) {
-  const server = http.createServer(async (req, res) => {
-    // Only proxy chat completions endpoint
-    if (req.method === "POST" && req.url?.startsWith("/v1/chat/completions")) {
-      let body = "";
-      req.on("data", (chunk) => { body += chunk; });
-      req.on("end", async () => {
-        try {
-          const requestData = JSON.parse(body);
-
-          // Forward to actual LLM using OpenAI client
-          const client = new OpenAI({
-            baseURL: targetBaseURL,
-            apiKey: apiKey || "not-needed",
-            timeout: 120000,
-          });
-
-          const response = await client.chat.completions.create(requestData);
-
-          // Transform response (parse text-based tool calls)
-          const transformed = transformLLMResponse(response);
-
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(transformed));
-        } catch (err) {
-          log.err(`LLM Proxy error: ${err.message}`);
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: { message: err.message } }));
-        }
-      });
-      return;
-    }
-
-    // Pass through other endpoints (models list, etc.)
-    if (req.method === "GET" && req.url?.startsWith("/v1/models")) {
-      try {
-        const client = new OpenAI({
-          baseURL: targetBaseURL,
-          apiKey: apiKey || "not-needed",
-        });
-        const models = await client.models.list();
-        const modelList = [];
-        for await (const m of models) modelList.push(m);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ data: modelList }));
-      } catch (err) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: { message: err.message } }));
-      }
-      return;
-    }
-
-    res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "not found" }));
-  });
-
-  server.listen(LLM_PROXY_PORT, LLM_PROXY_HOST, () => {
-    log.ok(`LLM Proxy: http://${LLM_PROXY_HOST}:${LLM_PROXY_PORT} → ${targetBaseURL}`);
-  });
-
   return server;
 }
 
@@ -1347,7 +1443,6 @@ async function migrateFromLegacyConfig() {
   log.info("Di chuyển config cũ sang multi-bot...");
   const id = slugify(legacy.bot.name);
   const now = new Date().toISOString();
-  // Set skills to all available if not present
   if (!legacy.bot.skills) {
     legacy.bot.skills = discoverSkills().map((s) => s.name);
   }
@@ -1360,16 +1455,6 @@ async function migrateFromLegacyConfig() {
   saveBot(profile);
   log.ok(`Đã chuyển "${profile.bot.name}" -> data/bots/${id}.json`);
 
-  // Migrate workspace
-  const oldWork = path.join(os.homedir(), ".picoclaw", "workspace");
-  const newWork = path.join(PICOCLAW_WORKSPACES_DIR, id);
-  if (fs.existsSync(oldWork) && !fs.existsSync(newWork)) {
-    fs.mkdirSync(path.dirname(newWork), { recursive: true });
-    fs.renameSync(oldWork, newWork);
-    log.ok(`Workspace -> ${newWork}`);
-  }
-
-  // Backup legacy config
   const backupPath = CONFIG_FILE + ".bak";
   fs.renameSync(CONFIG_FILE, backupPath);
   log.dim(`Config cũ lưu tại: ${backupPath}`);

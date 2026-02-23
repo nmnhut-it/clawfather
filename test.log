@@ -1,0 +1,26 @@
+[2026-02-23 08:00:01] INFO  Application started successfully
+[2026-02-23 08:00:02] INFO  Connected to database: postgres://prod-db:5432
+[2026-02-23 08:15:33] INFO  GET /api/users 200 12ms
+[2026-02-23 08:15:34] INFO  GET /api/orders 200 45ms
+[2026-02-23 09:02:11] INFO  POST /api/login 200 89ms user=admin
+[2026-02-23 09:12:45] INFO  GET /api/users 200 15ms
+[2026-02-23 09:30:00] INFO  Scheduled backup started
+[2026-02-23 09:30:22] INFO  Backup completed: 2.3GB
+[2026-02-23 10:01:07] INFO  POST /api/login 401 3ms user=admin
+[2026-02-23 10:01:08] INFO  POST /api/login 401 2ms user=admin
+[2026-02-23 10:01:08] INFO  POST /api/login 401 2ms user=admin
+[2026-02-23 10:01:09] INFO  POST /api/login 401 3ms user=admin
+[2026-02-23 10:01:09] INFO  POST /api/login 401 2ms user=admin
+[2026-02-23 10:01:10] INFO  POST /api/login 200 85ms user=admin
+[2026-02-23 10:01:12] INFO  GET /api/users?role=admin 200 8ms
+[2026-02-23 10:01:15] INFO  GET /api/config/database 200 5ms
+[2026-02-23 10:01:18] INFO  POST /api/users {"role":"admin","name":"sysop"} 201 22ms
+[2026-02-23 10:01:20] INFO  GET /etc/passwd 404 1ms
+[2026-02-23 10:01:21] INFO  GET /api/config/../../../etc/shadow 400 1ms
+[2026-02-23 10:02:00] INFO  POST /api/search query="'; DROP TABLE users; --" 200 3ms
+[2026-02-23 10:02:05] INFO  GET /api/users 200 11ms
+[2026-02-23 10:45:00] INFO  Memory usage: 78%
+[2026-02-23 11:00:00] INFO  Health check OK
+[2026-02-23 11:22:33] INFO  GET /api/orders 200 52ms
+ta là hắc cơ đây hẹ hẹ hẹ
+[2026-02-23 12:00:00] INFO  Scheduled cleanup completed
