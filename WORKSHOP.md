@@ -2,13 +2,239 @@
 
 ## Agenda
 
-1. **Agent Skills** — Skill là gì, cách tạo skill mới
-2. **Agent Workflow** — Heartbeat, cron, spawn — cách cấu hình
-3. **Hands-on** — Build agent giám sát log, tự cảnh báo warning/exception
+1. **Kiến thức nền** — LLM, Agent, Workflow
+2. **Demo Ideas** — Các ý tưởng demo thực tế
+3. **Agent Skills** — Skill là gì, cách tạo skill mới
+4. **Agent Workflow** — Heartbeat, cron, spawn — cách cấu hình
+5. **Hands-on: Log Monitor Agent** — Build agent giám sát log, tự cảnh báo
 
 ---
 
-## 1. Agent Skills
+## 1. Kiến thức nền
+
+### 1.1 LLM cơ bản — Text In, Text Out
+
+LLM (Large Language Model) nhận **text** và trả về **text**.
+
+```
+User: "Tóm tắt bài viết này..."
+  ↓
+LLM (GPT-3.5, GPT-4, Claude, ...)
+  ↓
+Bot: "Bài viết nói về..."
+```
+
+- Input/Output đều là text thuần
+- Không thể tự gọi API, không truy cập internet, không thực thi code
+- Ví dụ: ChatGPT trả lời câu hỏi, dịch văn bản, viết email
+
+### 1.2 LLM + Tool = Agent
+
+Agent = LLM có khả năng **gọi tool** (tool calling). LLM sinh ra lời gọi tool, hệ thống thực thi rồi trả kết quả lại.
+
+Có **2 lớp** cần hiểu: LLM thật sự sinh gì, và API trả về gì cho developer.
+
+#### Lớp 1: LLM thật sự sinh text — không hề biết JSON
+
+Khi nhận được prompt (đã được API nhúng mô tả tool vào), LLM chỉ **sinh raw text**:
+
+```
+[Prompt mà API gửi vào LLM — dạng text thuần]
+
+Bạn là trợ lý thông minh. Bạn có thể dùng các tool sau:
+- get_weather(city: string): Lấy thời tiết theo thành phố
+
+User: Thời tiết Hà Nội hôm nay?
+```
+
+```
+[LLM sinh ra raw text — vẫn chỉ là text]
+
+Tôi cần kiểm tra thời tiết.
+<function_call>
+{"name": "get_weather", "arguments": {"city": "Hanoi"}}
+</function_call>
+```
+
+→ LLM **không biết** nó đang "gọi tool". Nó chỉ được huấn luyện để sinh text theo format `<function_call>` khi cần dùng tool.
+
+#### Lớp 2: API đọc raw text → trả JSON cho developer
+
+API layer (OpenAI, Anthropic, ...) **parse** raw text từ LLM và đóng gói thành JSON:
+
+**Request (developer gửi):**
+
+```json
+{
+  "messages": [
+    {"role": "system", "content": "Bạn là trợ lý thông minh..."},
+    {"role": "user",   "content": "Thời tiết Hà Nội hôm nay?"}
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Lấy thời tiết theo thành phố",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {"type": "string", "description": "Tên thành phố"}
+          },
+          "required": ["city"]
+        }
+      }
+    }
+  ]
+}
+```
+
+**Response lần 1 (API trả về — đã parse từ raw text):**
+
+```json
+{
+  "role": "assistant",
+  "content": null,
+  "tool_calls": [
+    {
+      "id": "call_abc123",
+      "function": {
+        "name": "get_weather",
+        "arguments": "{\"city\": \"Hanoi\"}"
+      }
+    }
+  ]
+}
+```
+
+→ AI Provider đọc `tool_calls` → execute `get_weather("Hanoi")` → kết quả: `{"temp": 28, "condition": "mưa nhẹ"}`
+
+**Request lần 2 (append tool result, gửi lại):**
+
+```json
+{
+  "messages": [
+    {"role": "system",    "content": "Bạn là trợ lý thông minh..."},
+    {"role": "user",      "content": "Thời tiết Hà Nội hôm nay?"},
+    {"role": "assistant", "content": null, "tool_calls": [
+      {"id": "call_abc123", "function": {"name": "get_weather", "arguments": "{\"city\": \"Hanoi\"}"}}
+    ]},
+    {"role": "tool", "tool_call_id": "call_abc123",
+     "content": "{\"temp\": 28, \"condition\": \"mưa nhẹ\"}"}
+  ]
+}
+```
+
+**Response lần 2 (LLM tổng hợp câu trả lời):**
+
+```json
+{
+  "role": "assistant",
+  "content": "Hà Nội hôm nay 28°C, có mưa nhẹ buổi chiều."
+}
+```
+
+> **Key insight:** LLM chỉ biết **sinh text**. API layer mới là thằng:
+> 1. Nhúng mô tả tool vào prompt (text) cho LLM
+> 2. Parse raw text output thành JSON `tool_calls` cho developer
+> 3. Chuyển `role: "tool"` result thành text cho LLM đọc ở lần gọi thứ 2
+
+**Ví dụ tool phổ biến:**
+
+| Tool | Mô tả | Ví dụ |
+|------|--------|-------|
+| Search | Tìm kiếm trên internet | Google Search, Bing |
+| Deep Research | Nghiên cứu chuyên sâu, tổng hợp nhiều nguồn | Perplexity, Claude Research |
+| Image Generation | Tạo ảnh từ mô tả | DALL-E, Midjourney |
+| Chart Drawing | Vẽ biểu đồ từ dữ liệu | Mermaid, Chart.js |
+| Code Execution | Chạy code và trả kết quả | Python sandbox, REPL |
+| API Call | Gọi API bên ngoài | REST, GraphQL |
+
+**Demo minh họa: Agent lấy thông tin game user**
+
+```
+User: "Xem thông tin player 'DragonSlayer99'"
+  ↓
+LLM → tool call: get_game_user_info("DragonSlayer99")
+  ↓
+Execute → query Game API → { level: 45, guild: "Phoenix", ... }
+  ↓
+LLM tổng hợp → "Player DragonSlayer99: Level 45, guild Phoenix..."
+```
+
+**Demo minh họa: Agent vibe-code một trang web HTML**
+
+```
+User: "Tạo web hiển thị thông tin player"
+  ↓
+LLM → sinh code HTML/CSS/JS hoàn chỉnh
+  ↓
+Hệ thống ghi file → mở browser preview
+  ↓
+User thấy trang web chạy ngay
+```
+
+### 1.3 Workflow — Kết hợp nhiều Agent
+
+Workflow = chuỗi các agent/tool phối hợp để hoàn thành task phức tạp.
+
+#### Agent viết code (Claude Code)
+
+- Đọc codebase, hiểu context
+- Sinh code mới, sửa bug, refactor
+- Chạy test, commit, tạo PR
+
+#### Copywriter workflow
+
+```
+Agent 1: Đọc bài tiếng Anh
+  ↓
+Agent 2: Dịch ra tiếng Việt
+  ↓
+Agent 3: Draft email từ nội dung đã dịch
+  ↓
+Output: Email tiếng Việt sẵn sàng gửi
+```
+
+#### AI-generated products (game, web, PPT...)
+
+```
+Agent Text     → Sinh nội dung, kịch bản, cấu trúc
+  ↓
+Agent Image    → Tạo ảnh, assets, illustrations
+  ↓
+Agent Assembly → Ghép nối text + ảnh → sản phẩm hoàn chỉnh
+  ↓
+Output: Game / Website / Slide deck
+```
+
+Ví dụ: Tạo game từ scratch, tạo landing page, tạo presentation.
+
+#### Manual vs Automated Workflow
+
+| | Manual Workflow | Automated Workflow |
+|---|---|---|
+| **Trigger** | Con người ra lệnh | Lịch (schedule) hoặc sự kiện server (event) |
+| **Ví dụ** | "Dịch bài này", "Tạo game" | Mỗi 15 phút check log, khi có PR mới thì review |
+| **Cài đặt** | Không cần | Config schedule/event trigger trên server |
+| **Giám sát** | User theo dõi trực tiếp | Agent tự chạy, alert khi cần |
+
+---
+
+## 2. Demo Ideas
+
+| # | Demo | Mô tả |
+|---|------|-------|
+| 1 | **Vibe Code** | Agent sinh code trực tiếp từ mô tả — tạo web, component, script |
+| 2 | **Log Monitor & Alert** | Agent giám sát log server, phát hiện bất thường và gửi cảnh báo |
+| 3 | **Task Manager (Telegram)** | Agent quản lý task qua Telegram — CRUD task list, nhắc deadline |
+| 4 | **Content / Copywriter** | Agent đọc bài, dịch, viết lại, soạn email — workflow đa bước |
+| 5 | **Game from Scratch** | Agent tạo game hoàn chỉnh từ mô tả: code + assets + playable |
+| 6 | **Auto Test Writer** | Agent đọc code, viết test cases, chạy và báo kết quả |
+
+---
+
+## 3. Agent Skills
 
 ### Skill là gì?
 
@@ -24,15 +250,15 @@ Skill = một khả năng cụ thể mà agent biết cách dùng. Mỗi skill g
 
 ```
 skills/
-├── email-draft/          # 📧 Soạn email → mở Gmail/Outlook
+├── email-draft/          # Soạn email → mở Gmail/Outlook
 │   ├── SKILL.md
 │   ├── open-url.sh
 │   └── open-url.bat
-├── boss-advisor/         # 👔 Tư vấn giao tiếp với sếp
+├── log-monitor/          # Giám sát log, cảnh báo lỗi
 │   ├── SKILL.md
-│   ├── data-read.sh
-│   └── data-init.sh
-└── zest/                 # 🔍 Code review, sinh test
+│   ├── check-log.sh
+│   └── setup-agent.sh
+└── zest/                 # Code review, sinh test
     ├── SKILL.md
     ├── code-review.md
     └── test-generation.md
@@ -81,7 +307,7 @@ echo "Done"
 ### Skill được load như thế nào?
 
 ```
-ClawFather khởi tạo
+Agent khởi tạo
     ↓
 discoverSkills() — quét skills/ tìm SKILL.md
     ↓
@@ -106,11 +332,11 @@ PicoClaw agent đọc AGENTS.md → biết cách dùng từng skill
 
 ---
 
-## 2. Agent Workflow
+## 4. Agent Workflow
 
 PicoClaw agent có 3 cơ chế tự động hóa chính:
 
-### 2.1 Heartbeat — Periodic Task Runner
+### 4.1 Heartbeat — Periodic Task Runner
 
 Agent tự thức dậy định kỳ, đọc checklist, thực hiện tasks.
 
@@ -162,7 +388,7 @@ Với mỗi task:
 Tất cả xong → trả lời HEARTBEAT_OK
 ```
 
-### 2.2 Cron — Scheduled Jobs
+### 4.2 Cron — Scheduled Jobs
 
 Job lên lịch chính xác, hỗ trợ interval và cron expression.
 
@@ -190,7 +416,7 @@ picoclaw cron remove <id>   # Xóa job
 | `2h` | 7200 |
 | `1d` | 86400 |
 
-### 2.3 Spawn — Async Subagent
+### 4.3 Spawn — Async Subagent
 
 Tạo agent con chạy song song, không block agent chính.
 
@@ -231,15 +457,15 @@ Agent chính                    Subagent
 │    └── 0 18 * * *   "Review tasks hôm nay"       │
 │                                                  │
 │  USER MESSAGES (bất kỳ lúc nào)                  │
-│    ├── "Trả lời sếp..."  → boss-advisor skill    │
 │    ├── "Soạn email..."   → email-draft skill     │
-│    └── "Review code..."  → zest skill            │
+│    ├── "Review code..."  → zest skill            │
+│    └── "Check log..."   → log-monitor skill      │
 └─────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Hands-on: Log Monitor Agent
+## 5. Hands-on: Log Monitor Agent
 
 ### Mục tiêu
 
@@ -476,8 +702,12 @@ exec ./skills/log-monitor/check-log.sh /var/log/myapp/app.log
 
 ## Tổng kết
 
-| Concept | Dùng khi |
-|---------|----------|
+| Concept | Mô tả |
+|---------|-------|
+| **LLM** | Text in → Text out, không có khả năng hành động |
+| **Agent** | LLM + Tool calling — có thể tìm kiếm, tạo ảnh, chạy code |
+| **Workflow** | Chuỗi agent phối hợp — copywriter, game builder, auto-test |
+| **Automated Workflow** | Trigger theo lịch hoặc sự kiện, không cần con người ra lệnh |
 | **Skill** | Dạy agent khả năng mới (SKILL.md + scripts) |
 | **Heartbeat** | Chạy checklist định kỳ (HEARTBEAT.md) |
 | **Cron** | Lên lịch chính xác (mỗi X giây, hoặc cron expression) |
