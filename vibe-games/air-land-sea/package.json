@@ -1,0 +1,12 @@
+{
+  "name": "air-land-sea",
+  "version": "1.0.0",
+  "description": "Air, Land & Sea card game with HTTP API for PicoClaw bot play",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

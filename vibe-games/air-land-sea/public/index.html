@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Air, Land &amp; Sea</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --panel: #16213e;
+    --border: #0f3460;
+    --text: #e4e4e4;
+    --muted: #888;
+    --air: #0091B2;
+    --land: #F37F29;
+    --sea: #89BD2E;
+    --accent: #e94560;
+    --card-bg: #1e2d4a;
+    --card-hover: #2a3f5f;
+    --selected: #e94560;
+    --p1-color: #4fc3f7;
+    --p2-color: #ef5350;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Courier New', monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 8px; color: var(--accent); }
+
+  /* --- Animations --- */
+  @keyframes cardFlashIn {
+    0% { background: #fff; transform: scale(1.15); box-shadow: 0 0 20px rgba(255,255,255,0.8); }
+    50% { background: #ffe082; transform: scale(1.05); box-shadow: 0 0 12px rgba(255,224,130,0.5); }
+    100% { background: var(--card-bg); transform: scale(1); box-shadow: none; }
+  }
+  @keyframes abilityGlow {
+    0% { box-shadow: 0 0 0px transparent; }
+    30% { box-shadow: 0 0 16px 4px #ce93d8; }
+    100% { box-shadow: 0 0 0px transparent; }
+  }
+  @keyframes theaterPulse {
+    0% { border-color: var(--border); }
+    30% { border-color: #ffd54f; box-shadow: 0 0 14px rgba(255,213,79,0.4); }
+    100% { border-color: var(--border); box-shadow: none; }
+  }
+  @keyframes flipCard {
+    0% { transform: rotateY(0deg); }
+    50% { transform: rotateY(90deg); background: #7e57c2; }
+    100% { transform: rotateY(0deg); }
+  }
+  @keyframes withdrawFlash {
+    0% { background: var(--panel); }
+    30% { background: #b71c1c; }
+    100% { background: var(--panel); }
+  }
+  @keyframes scorePopUp {
+    0% { transform: scale(1); color: var(--text); }
+    40% { transform: scale(1.6); color: #ffd54f; }
+    100% { transform: scale(1); color: var(--text); }
+  }
+  @keyframes logEntrySlide {
+    from { opacity: 0; transform: translateX(-12px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  .board-card.anim-new { animation: cardFlashIn 0.7s ease-out; }
+  .board-card.anim-ability { animation: abilityGlow 1s ease-out; }
+  .board-card.anim-flip { animation: flipCard 0.6s ease-in-out; }
+  .theater.anim-pulse { animation: theaterPulse 0.8s ease-out; }
+  .scoreboard.anim-withdraw { animation: withdrawFlash 0.8s ease-out; }
+  .score-value.anim-pop { animation: scorePopUp 0.6s ease-out; }
+  .log-entry.anim-new { animation: logEntrySlide 0.3s ease-out; }
+
+  .scoreboard {
+    display: flex; gap: 24px; padding: 8px 16px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; margin-bottom: 10px; font-size: 0.9rem;
+  }
+  .scoreboard .turn { color: var(--accent); font-weight: bold; }
+  .score-value { display: inline-block; }
+
+  .hand-info {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; margin-bottom: 10px;
+    font-size: 0.85rem; color: var(--muted);
+    display: flex; gap: 20px;
+  }
+  .theaters {
+    display: flex; gap: 8px; width: 100%; max-width: 900px; margin-bottom: 10px;
+  }
+  .theater {
+    flex: 1; background: var(--panel); border: 2px solid var(--border);
+    border-radius: 8px; padding: 8px; min-height: 200px;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .theater-header {
+    text-align: center; font-weight: bold; font-size: 1rem;
+    padding: 4px; border-radius: 4px; margin-bottom: 6px;
+  }
+  .theater[data-type="air"] .theater-header { background: var(--air); color: #000; }
+  .theater[data-type="land"] .theater-header { background: var(--land); color: #000; }
+  .theater[data-type="sea"] .theater-header { background: var(--sea); color: #000; }
+  .theater-control {
+    text-align:center; font-size:0.75rem; margin-bottom:4px; font-weight:bold;
+    transition: color 0.3s;
+  }
+  .theater-side { margin-bottom: 4px; }
+  .theater-side-label { font-size:0.7rem; color:var(--muted); margin-bottom:2px; }
+  .theater-divider { border-top:1px dashed var(--border); margin:4px 0; }
+  .strength-row {
+    display:flex; justify-content:space-between; font-size:0.8rem;
+    padding:2px 4px; background:rgba(255,255,255,0.05); border-radius:3px; margin-bottom:4px;
+  }
+  .board-card {
+    font-size: 0.75rem; padding: 3px 6px; margin: 2px 0;
+    background: var(--card-bg); border-radius: 3px; border-left: 3px solid var(--border);
+    transition: all 0.3s;
+  }
+  .board-card.facedown { color: var(--muted); font-style: italic; }
+  .board-card[data-type="air"] { border-left-color: var(--air); }
+  .board-card[data-type="land"] { border-left-color: var(--land); }
+  .board-card[data-type="sea"] { border-left-color: var(--sea); }
+
+  .actions {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;
+  }
+  .actions button {
+    padding: 8px 16px; font-family: inherit; font-size: 0.85rem;
+    background: var(--border); color: var(--text); border: 1px solid var(--muted);
+    border-radius: 4px; cursor: pointer; transition: all 0.15s;
+  }
+  .actions button:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
+  .actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .log-section {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; width: 100%; max-width: 900px;
+    max-height: 200px; overflow-y: auto; font-size: 0.75rem; color: var(--muted);
+  }
+  .log-entry { padding: 2px 0; }
+  .log-entry.log-p1 { color: var(--p1-color); }
+  .log-entry.log-p2 { color: var(--p2-color); }
+  .log-entry.log-system { color: var(--accent); font-weight: bold; }
+
+  .status-msg { color: var(--accent); font-size: 0.85rem; margin-bottom: 8px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<h1>AIR, LAND &amp; SEA</h1>
+
+<div class="scoreboard" id="scoreboard">
+  <span>P1: <strong class="score-value" id="score-p1">0</strong> VP</span>
+  <span>P2: <strong class="score-value" id="score-p2">0</strong> VP</span>
+  <span>First to 12</span>
+  <span class="turn" id="turn-indicator">...</span>
+</div>
+
+<div class="hand-info" id="hand-info">
+  <span>P1 hand: <strong id="p1-hand-count">6</strong></span>
+  <span>P2 hand: <strong id="p2-hand-count">6</strong></span>
+</div>
+
+<div class="theaters" id="theaters"></div>
+
+<div class="status-msg hidden" id="status-msg"></div>
+
+<div class="actions" id="actions">
+  <button id="btn-next-battle" class="hidden">Next Battle</button>
+  <button id="btn-new-game" class="hidden">New Game</button>
+</div>
+
+<div class="log-section" id="log"></div>
+
+<script>
+const API = '';
+let state = null;
+let prevState = null;
+let prevLogLen = 0;
+let prevScores = { p1: 0, p2: 0 };
+let prevBoardSnapshot = '';
+
+// --- Fetch & render loop ---
+
+async function fetchState() {
+  try {
+    const res = await fetch(`${API}/api/state?player=p1`);
+    prevState = state;
+    state = await res.json();
+    render();
+  } catch (e) { /* server may be restarting */ }
+}
+
+// --- Rendering ---
+
+function render() {
+  if (!state) return;
+  renderScoreboard();
+  renderHandInfo();
+  renderTheaters();
+  renderActions();
+  renderLog();
+}
+
+function renderScoreboard() {
+  const s1 = document.getElementById('score-p1');
+  const s2 = document.getElementById('score-p2');
+
+  if (prevScores.p1 !== state.scores.p1) {
+    s1.textContent = state.scores.p1;
+    s1.classList.remove('anim-pop');
+    void s1.offsetWidth;
+    s1.classList.add('anim-pop');
+  }
+  if (prevScores.p2 !== state.scores.p2) {
+    s2.textContent = state.scores.p2;
+    s2.classList.remove('anim-pop');
+    void s2.offsetWidth;
+    s2.classList.add('anim-pop');
+  }
+  prevScores = { ...state.scores };
+
+  const turnEl = document.getElementById('turn-indicator');
+  if (state.phase === 'END_BATTLE') {
+    turnEl.textContent = 'Battle over';
+    document.getElementById('scoreboard').classList.add('anim-withdraw');
+    setTimeout(() => document.getElementById('scoreboard').classList.remove('anim-withdraw'), 900);
+  } else if (state.phase === 'END_GAME') {
+    const winner = state.scores.p1 >= 12 ? 'P1' : 'P2';
+    turnEl.textContent = `Game over - ${winner} wins!`;
+  } else if (state.phase === 'WAITING_FOR_ABILITY_TARGET') {
+    const who = state.pendingAbility ? state.pendingAbility.player.toUpperCase() : '?';
+    turnEl.textContent = `${who} resolving ability...`;
+  } else {
+    turnEl.textContent = `${state.currentPlayer.toUpperCase()}'s turn`;
+  }
+}
+
+function renderHandInfo() {
+  document.getElementById('p1-hand-count').textContent = state.myHand.length;
+  document.getElementById('p2-hand-count').textContent = state.opponentHandCount;
+}
+
+function renderTheaters() {
+  const container = document.getElementById('theaters');
+  const newSnapshot = JSON.stringify(state.board) + JSON.stringify(state.theaterStrengths);
+  const boardChanged = newSnapshot !== prevBoardSnapshot;
+  prevBoardSnapshot = newSnapshot;
+
+  container.innerHTML = '';
+  for (const t of state.theaterOrder) {
+    const control = state.theaterControl[t];
+    const str = state.theaterStrengths[t];
+    const prevControl = prevState ? prevState.theaterControl[t] : null;
+    const controlChanged = prevControl && prevControl !== control;
+
+    const div = document.createElement('div');
+    div.className = 'theater' + (controlChanged ? ' anim-pulse' : '');
+    div.setAttribute('data-type', t);
+    div.innerHTML = `
+      <div class="theater-header">${theaterIcon(t)} ${t.toUpperCase()}</div>
+      <div class="theater-control" style="color:${control === 'p1' ? 'var(--p1-color)' : 'var(--p2-color)'}">
+        ${control.toUpperCase()} controls
+      </div>
+      <div class="strength-row">
+        <span style="color:var(--p1-color)">P1: ${str.p1}</span>
+        <span style="color:var(--p2-color)">P2: ${str.p2}</span>
+      </div>
+      <div class="theater-side">
+        <div class="theater-side-label">P2</div>
+        ${renderBoardCards(state.board[t].p2, prevState ? prevState.board[t].p2 : [], 'p2')}
+      </div>
+      <div class="theater-divider"></div>
+      <div class="theater-side">
+        <div class="theater-side-label">P1</div>
+        ${renderBoardCards(state.board[t].p1, prevState ? prevState.board[t].p1 : [], 'p1')}
+      </div>
+    `;
+    container.appendChild(div);
+  }
+}
+
+function renderBoardCards(cards, prevCards, player) {
+  if (cards.length === 0) return '<div style="color:var(--muted);font-size:0.7rem">empty</div>';
+  const prevLen = prevCards ? prevCards.length : 0;
+  return cards.map((c, i) => {
+    const isNew = i >= prevLen;
+    const wasFlipped = !isNew && prevCards[i] && prevCards[i].faceUp !== c.faceUp;
+    let animClass = '';
+    if (isNew) animClass = 'anim-new';
+    else if (wasFlipped) animClass = 'anim-flip';
+
+    if (!c.faceUp) {
+      return `<div class="board-card facedown ${animClass}">[FACEDOWN] str:2</div>`;
+    }
+    const type = c.type || '';
+    const abilityText = formatAbility(c.ability);
+    const hasAbility = c.ability && c.duration === 'ongoing';
+    const glowClass = hasAbility ? ' anim-ability' : '';
+    return `<div class="board-card ${animClass}${isNew ? glowClass : ''}" data-type="${type}">${type.toUpperCase()} ${c.strength} - ${abilityText}</div>`;
+  }).join('');
+}
+
+function renderActions() {
+  const nextBtn = document.getElementById('btn-next-battle');
+  const newBtn = document.getElementById('btn-new-game');
+  nextBtn.classList.toggle('hidden', state.phase !== 'END_BATTLE');
+  newBtn.classList.toggle('hidden', state.phase !== 'END_GAME');
+}
+
+function renderLog() {
+  const container = document.getElementById('log');
+  const currentLen = state.log.length;
+  const newEntries = currentLen > prevLogLen;
+
+  container.innerHTML = state.log.map((l, i) => {
+    const isNewEntry = newEntries && i >= prevLogLen;
+    const cssClass = getLogClass(l);
+    return `<div class="log-entry ${cssClass}${isNewEntry ? ' anim-new' : ''}">${l}</div>`;
+  }).join('');
+  prevLogLen = currentLen;
+  container.scrollTop = container.scrollHeight;
+}
+
+function getLogClass(line) {
+  if (line.startsWith('P1 ')) return 'log-p1';
+  if (line.startsWith('P2 ')) return 'log-p2';
+  if (line.includes('wins') || line.includes('Battle') || line.includes('Theaters')) return 'log-system';
+  return '';
+}
+
+// --- Helpers ---
+
+function theaterIcon(type) {
+  const icons = { air: '\u2708', land: '\u26F0', sea: '\u2693' };
+  return icons[type] || '';
+}
+
+function formatAbility(ability) {
+  if (!ability) return 'No ability';
+  return ability.replace('-', ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function showStatus(msg) {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 3000);
+}
+
+// --- Event bindings ---
+document.getElementById('btn-next-battle').onclick = async () => {
+  await fetch(`${API}/api/action`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'next-battle' }),
+  });
+  fetchState();
+};
+document.getElementById('btn-new-game').onclick = async () => {
+  await fetch(`${API}/api/action`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'new-game' }),
+  });
+  prevLogLen = 0; prevScores = { p1: 0, p2: 0 }; prevBoardSnapshot = '';
+  prevState = null;
+  fetchState();
+};
+
+// --- Polling (faster for AI vs AI spectating) ---
+fetchState();
+setInterval(fetchState, 1200);
+</script>
+</body>
+</html>

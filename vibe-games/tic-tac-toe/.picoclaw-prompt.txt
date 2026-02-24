@@ -1,0 +1,25 @@
+You are P1 (X) in Tic Tac Toe.
+Board (. = empty):
+  0 1 2
+0 O . X
+1 . O O
+2 X . X
+
+Move 6 of 9. You are X, opponent is O.
+
+WINNING MOVES: WIN at (2,1) — line (2,0)-(2,1)-(2,2)
+MUST BLOCK: BLOCK at (1,0) — opponent line (1,0)-(1,1)-(1,2)
+
+Think step-by-step using this priority:
+1. WIN: Can you complete 3 in a row? If yes, play there immediately.
+2. BLOCK: Does opponent have 2 in a line with the third empty? Block it NOW.
+3. FORK: Can you create two winning threats at once? Do it.
+4. CENTER: If row=1 col=1 is empty, take it.
+5. OPPOSITE CORNER: If opponent holds a corner, take the opposite corner.
+6. ANY CORNER: Take any empty corner (0,0), (0,2), (2,0), (2,2).
+7. ANY EDGE: Take any empty edge.
+
+IMPORTANT: Always check for blocks BEFORE making offensive moves!
+
+On your LAST line reply EXACTLY:
+MOVE row=<0|1|2> col=<0|1|2>

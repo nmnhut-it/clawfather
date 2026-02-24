@@ -1,0 +1,9 @@
+You are P1 in Air Land Sea.
+Theaters: LAND(P1:10 P2:12 ctrl:p2), AIR(P1:0 P2:0 ctrl:p2), SEA(P1:0 P2:0 ctrl:p2). First player: p2. Scores: P1=6 P2=9.
+Your hand (1 cards): [idx=0] LAND str=3 ability=maneuver. Withdraw cost: 6VP.
+Think step-by-step: which theaters can you win? Which card and placement helps most?
+IMPORTANT: Do NOT withdraw early. You still have 1 cards — each card can swing a theater. Only withdraw if you have 2 or fewer cards left AND you are losing all 3 theaters with no way to flip them.
+Then on your LAST line reply EXACTLY:
+PLAY idx=<cardIndex> theater=<air|land|sea> faceup=<true|false>
+or: WITHDRAW (only as last resort)
+Face-up plays must match card type to theater (unless Aerodrome/Air Drop active).

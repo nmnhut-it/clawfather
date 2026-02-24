@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fantasy Farm</title>
+  <style>
+    :root {
+      --bg-dark: #1a1410;
+      --bg-panel: #2a2218;
+      --bg-sidebar: #231e16;
+      --border-wood: #5a4230;
+      --border-gold: #c9a84c;
+      --text-parchment: #e8d5b7;
+      --text-dim: #a08b6e;
+      --text-gold: #f0d060;
+      --accent-green: #6a9f4c;
+      --accent-blue: #4a7fa8;
+      --accent-purple: #8a5ab5;
+      --accent-red: #b54a4a;
+      --font-body: "Segoe UI", Georgia, serif;
+      --font-heading: "Segoe UI", "Trebuchet MS", sans-serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--font-body);
+      background: var(--bg-dark);
+      color: var(--text-parchment);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ───────────────────────────────────── */
+    header {
+      background: linear-gradient(135deg, var(--bg-panel), #1e1a12);
+      border-bottom: 2px solid var(--border-wood);
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .header-title {
+      font-family: var(--font-heading);
+      font-size: 1.4rem;
+      color: var(--text-gold);
+      letter-spacing: 1px;
+    }
+
+    .header-time {
+      font-size: 0.95rem;
+      color: var(--text-dim);
+    }
+
+    .header-time .season {
+      color: var(--text-gold);
+      font-weight: bold;
+      text-transform: capitalize;
+    }
+
+    /* ── Main layout ──────────────────────────────── */
+    .main-layout {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ── Narrative panel ──────────────────────────── */
+    .narrative-panel {
+      flex: 1;
+      padding: 1.5rem;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .narrative-text {
+      line-height: 1.7;
+      font-size: 1.05rem;
+      white-space: pre-wrap;
+      flex: 1;
+    }
+
+    .narrative-text p { margin-bottom: 1rem; }
+
+    .narrative-history {
+      margin-top: 1.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border-wood);
+    }
+
+    .history-entry {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      margin-bottom: 0.5rem;
+      padding-left: 0.5rem;
+      border-left: 2px solid var(--border-wood);
+    }
+
+    .history-entry .history-action {
+      color: var(--text-gold);
+      font-style: italic;
+    }
+
+    /* ── Sidebar ──────────────────────────────────── */
+    .sidebar {
+      width: 280px;
+      background: var(--bg-sidebar);
+      border-left: 2px solid var(--border-wood);
+      padding: 1rem;
+      overflow-y: auto;
+    }
+
+    .sidebar-section {
+      margin-bottom: 1.25rem;
+    }
+
+    .sidebar-section h3 {
+      font-family: var(--font-heading);
+      font-size: 0.85rem;
+      color: var(--text-gold);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 0.5rem;
+      padding-bottom: 0.25rem;
+      border-bottom: 1px solid var(--border-wood);
+    }
+
+    .resource-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.2rem 0;
+      font-size: 0.9rem;
+    }
+
+    .resource-label { color: var(--text-dim); }
+    .resource-value { color: var(--text-parchment); font-weight: bold; }
+
+    .plot-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.4rem;
+    }
+
+    .plot-cell {
+      background: var(--bg-dark);
+      border: 1px solid var(--border-wood);
+      border-radius: 4px;
+      padding: 0.3rem 0.5rem;
+      font-size: 0.8rem;
+      text-align: center;
+    }
+
+    .plot-cell.empty { color: var(--text-dim); }
+    .plot-cell.seed { color: var(--accent-green); border-color: var(--accent-green); }
+    .plot-cell.sprout { color: #8bc34a; border-color: #8bc34a; }
+    .plot-cell.growing { color: #4caf50; border-color: #4caf50; }
+    .plot-cell.ready { color: var(--text-gold); border-color: var(--border-gold); }
+    .plot-cell.withered { color: var(--accent-red); border-color: var(--accent-red); }
+
+    .quest-item {
+      font-size: 0.85rem;
+      padding: 0.3rem 0;
+      border-bottom: 1px dotted var(--border-wood);
+    }
+
+    .quest-item .quest-title { color: var(--accent-blue); }
+    .quest-item .quest-desc { color: var(--text-dim); font-size: 0.8rem; }
+
+    .location-tag {
+      display: inline-block;
+      font-size: 0.75rem;
+      background: var(--bg-dark);
+      border: 1px solid var(--border-wood);
+      border-radius: 3px;
+      padding: 0.15rem 0.4rem;
+      margin: 0.15rem;
+      color: var(--text-dim);
+    }
+
+    .skill-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      padding: 0.15rem 0;
+    }
+
+    .skill-name { color: var(--text-dim); text-transform: capitalize; }
+    .skill-level { color: var(--accent-purple); }
+
+    .event-item {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      padding: 0.2rem 0;
+      font-style: italic;
+    }
+
+    /* ── Footer / Choices ─────────────────────────── */
+    footer {
+      background: var(--bg-panel);
+      border-top: 2px solid var(--border-wood);
+      padding: 1rem 1.5rem;
+    }
+
+    .choices-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      justify-content: center;
+    }
+
+    .choice-btn {
+      background: linear-gradient(180deg, #3a3020, #2a2218);
+      border: 1px solid var(--border-gold);
+      color: var(--text-parchment);
+      padding: 0.6rem 1.2rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: var(--font-body);
+      font-size: 0.9rem;
+      transition: all 0.2s;
+      max-width: 320px;
+    }
+
+    .choice-btn:hover:not(:disabled) {
+      background: linear-gradient(180deg, #4a4030, #3a3228);
+      border-color: var(--text-gold);
+      color: var(--text-gold);
+    }
+
+    .choice-btn:disabled {
+      opacity: 0.5;
+      cursor: wait;
+    }
+
+    .new-game-btn {
+      background: linear-gradient(180deg, #2a4020, #1a3010);
+      border: 1px solid var(--accent-green);
+      color: var(--accent-green);
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: var(--font-body);
+      font-size: 0.85rem;
+      transition: all 0.2s;
+    }
+
+    .new-game-btn:hover:not(:disabled) {
+      background: linear-gradient(180deg, #3a5030, #2a4020);
+      color: #8fcf6c;
+    }
+
+    .new-game-btn:disabled { opacity: 0.5; cursor: wait; }
+
+    /* ── Loading spinner ──────────────────────────── */
+    .loading-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 8, 5, 0.7);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+    }
+
+    .loading-overlay.active { display: flex; }
+
+    .loading-text {
+      color: var(--text-gold);
+      font-size: 1.1rem;
+      font-style: italic;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid var(--border-wood);
+      border-top: 3px solid var(--text-gold);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-bottom: 1rem;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+
+    /* ── Welcome screen ───────────────────────────── */
+    .welcome-screen {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      text-align: center;
+      padding: 2rem;
+    }
+
+    .welcome-screen h2 {
+      font-family: var(--font-heading);
+      color: var(--text-gold);
+      font-size: 2rem;
+      margin-bottom: 1rem;
+    }
+
+    .welcome-screen p {
+      color: var(--text-dim);
+      font-size: 1.05rem;
+      max-width: 500px;
+      margin-bottom: 1.5rem;
+      line-height: 1.6;
+    }
+
+    /* ── Responsive ───────────────────────────────── */
+    @media (max-width: 768px) {
+      .main-layout { flex-direction: column; }
+      .sidebar {
+        width: 100%;
+        border-left: none;
+        border-top: 2px solid var(--border-wood);
+        max-height: 200px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-title">Fantasy Farm</div>
+  <div class="header-time" id="header-time">
+    <span class="new-game-btn" id="btn-new-game" onclick="startNewGame()">New Game</span>
+  </div>
+</header>
+
+<div class="main-layout">
+  <!-- Narrative -->
+  <div class="narrative-panel" id="narrative-panel">
+    <div class="welcome-screen" id="welcome-screen">
+      <h2>Fantasy Farm</h2>
+      <p>A magical farmstead awaits you on the edge of Thornveil Forest. Grow enchanted crops, befriend mythical creatures, and uncover ancient mysteries.</p>
+      <button class="new-game-btn" onclick="startNewGame()" style="font-size:1.1rem; padding:0.8rem 2rem;">
+        Begin Your Journey
+      </button>
+    </div>
+    <div class="narrative-text" id="narrative-text" style="display:none;"></div>
+    <div class="narrative-history" id="narrative-history" style="display:none;"></div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar" id="sidebar" style="display:none;">
+    <div class="sidebar-section">
+      <h3>Resources</h3>
+      <div id="resources-list"></div>
+    </div>
+    <div class="sidebar-section">
+      <h3>Farm Plots</h3>
+      <div class="plot-grid" id="plots-grid"></div>
+    </div>
+    <div class="sidebar-section">
+      <h3>Skills</h3>
+      <div id="skills-list"></div>
+    </div>
+    <div class="sidebar-section">
+      <h3>Active Quests</h3>
+      <div id="quests-list"><span class="event-item">No active quests</span></div>
+    </div>
+    <div class="sidebar-section">
+      <h3>Locations</h3>
+      <div id="locations-list"></div>
+    </div>
+    <div class="sidebar-section">
+      <h3>Recent Events</h3>
+      <div id="events-list"><span class="event-item">Nothing yet...</span></div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="choices-container" id="choices-container"></div>
+</footer>
+
+<div class="loading-overlay" id="loading-overlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">The spirits weave your fate...</div>
+</div>
+
+<script>
+  const RESOURCE_ICONS = {
+    gold: "\u{1FA99}", wood: "\u{1FAB5}", stone: "\u{1FAA8}", mana: "\u{1F52E}",
+  };
+
+  const API_BASE = "";
+  let currentState = null;
+  let isLoading = false;
+
+  /* ── API helpers ─────────────────────────────── */
+
+  async function apiGet(path) {
+    const res = await fetch(`${API_BASE}${path}`);
+    return res.json();
+  }
+
+  async function apiPost(path, body) {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return res.json();
+  }
+
+  /* ── Loading state ───────────────────────────── */
+
+  function setLoading(on) {
+    isLoading = on;
+    document.getElementById("loading-overlay").classList.toggle("active", on);
+    document.querySelectorAll(".choice-btn, .new-game-btn").forEach((btn) => {
+      btn.disabled = on;
+    });
+  }
+
+  /* ── Render functions ────────────────────────── */
+
+  function renderTime(time) {
+    const el = document.getElementById("header-time");
+    el.innerHTML = `
+      Day ${time.day} &middot; <span class="season">${time.season}</span> &middot; Year ${time.year}
+      &nbsp;&nbsp;
+      <span class="new-game-btn" id="btn-new-game" onclick="startNewGame()">New Game</span>
+    `;
+  }
+
+  function renderResources(resources) {
+    const el = document.getElementById("resources-list");
+    el.innerHTML = Object.entries(resources).map(([key, val]) =>
+      `<div class="resource-row">
+        <span class="resource-label">${RESOURCE_ICONS[key] || ""} ${key}</span>
+        <span class="resource-value">${val}</span>
+      </div>`
+    ).join("");
+  }
+
+  function renderPlots(plots) {
+    const el = document.getElementById("plots-grid");
+    el.innerHTML = plots.map((p) => {
+      const label = p.stage === "empty" ? "Empty" : `${p.crop || "?"}\n${p.stage}`;
+      return `<div class="plot-cell ${p.stage}">${label}</div>`;
+    }).join("");
+  }
+
+  function renderSkills(skills) {
+    const el = document.getElementById("skills-list");
+    el.innerHTML = Object.entries(skills).map(([name, level]) =>
+      `<div class="skill-row">
+        <span class="skill-name">${name}</span>
+        <span class="skill-level">Lv ${level}</span>
+      </div>`
+    ).join("");
+  }
+
+  function renderQuests(quests) {
+    const el = document.getElementById("quests-list");
+    if (!quests || quests.length === 0) {
+      el.innerHTML = '<span class="event-item">No active quests</span>';
+      return;
+    }
+    el.innerHTML = quests.map((q) =>
+      `<div class="quest-item">
+        <div class="quest-title">${q.title || q.id}</div>
+        <div class="quest-desc">${q.description || ""}</div>
+      </div>`
+    ).join("");
+  }
+
+  function renderLocations(locations) {
+    const el = document.getElementById("locations-list");
+    el.innerHTML = (locations || []).map((loc) =>
+      `<span class="location-tag">${loc}</span>`
+    ).join("");
+  }
+
+  function renderEvents(events) {
+    const el = document.getElementById("events-list");
+    if (!events || events.length === 0) {
+      el.innerHTML = '<span class="event-item">Nothing yet...</span>';
+      return;
+    }
+    el.innerHTML = events.map((e) =>
+      `<div class="event-item">${e}</div>`
+    ).join("");
+  }
+
+  function renderNarrative(text) {
+    const el = document.getElementById("narrative-text");
+    el.style.display = "block";
+    el.innerHTML = "";
+
+    const paragraphs = text.split(/\n\n+/).filter(Boolean);
+    let charIdx = 0;
+
+    /* Typewriter effect — reveals text character by character */
+    const fullHtml = paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join("");
+    const tempDiv = document.createElement("div");
+    tempDiv.innerHTML = fullHtml;
+    const fullText = tempDiv.textContent;
+
+    el.innerHTML = fullHtml;
+    el.style.clipPath = "inset(0 100% 0 0)";
+
+    const totalChars = fullText.length;
+    const durationMs = Math.min(totalChars * 15, 3000);
+    const startTime = performance.now();
+
+    function animate(now) {
+      const progress = Math.min((now - startTime) / durationMs, 1);
+      const pct = (progress * 100).toFixed(1);
+      el.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+      if (progress < 1) requestAnimationFrame(animate);
+      else el.style.clipPath = "none";
+    }
+    requestAnimationFrame(animate);
+  }
+
+  function renderChoices(choices) {
+    const el = document.getElementById("choices-container");
+    el.innerHTML = choices.map((c) =>
+      `<button class="choice-btn" onclick="makeChoice('${escapeAttr(c.id)}')" ${isLoading ? "disabled" : ""}>
+        ${escapeHtml(c.text)}
+      </button>`
+    ).join("");
+  }
+
+  function renderFullState(data) {
+    currentState = data;
+    document.getElementById("welcome-screen").style.display = "none";
+    document.getElementById("sidebar").style.display = "block";
+
+    renderTime(data.time);
+    renderResources(data.resources);
+    renderPlots(data.farm.plots);
+    renderSkills(data.skills);
+    renderQuests(data.quests);
+    renderLocations(data.locations);
+    renderEvents(data.recentEvents);
+
+    if (data.narrative) renderNarrative(data.narrative);
+    if (data.choices) renderChoices(data.choices);
+  }
+
+  /* ── Game actions ────────────────────────────── */
+
+  async function startNewGame() {
+    if (isLoading) return;
+    setLoading(true);
+    try {
+      const data = await apiPost("/api/new-game", {});
+      if (data.error) throw new Error(data.error);
+      renderFullState(data);
+    } catch (err) {
+      console.error("New game error:", err);
+      alert("Failed to start game: " + err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function makeChoice(choiceId) {
+    if (isLoading) return;
+    setLoading(true);
+    try {
+      const data = await apiPost("/api/turn", { choiceId });
+      if (data.loading) {
+        /* Server is busy with another request — retry after delay */
+        setTimeout(() => { setLoading(false); makeChoice(choiceId); }, 2000);
+        return;
+      }
+      if (data.error) throw new Error(data.error);
+      renderFullState(data);
+    } catch (err) {
+      console.error("Turn error:", err);
+      alert("Turn failed: " + err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /* ── Utilities ───────────────────────────────── */
+
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function escapeAttr(text) {
+    return text.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+  }
+
+  /* ── Init: load current state if game already running ── */
+  (async function init() {
+    try {
+      const data = await apiGet("/api/state");
+      if (data.narrative) renderFullState(data);
+    } catch {
+      /* Server not ready yet or no game — show welcome screen */
+    }
+  })();
+</script>
+</body>
+</html>

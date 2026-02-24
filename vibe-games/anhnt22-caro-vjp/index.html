@@ -1,0 +1,1564 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multi-Agent Caro</title>
+<style>
+:root {
+  --bg: #0f0f13;
+  --bg-secondary: #1a1a24;
+  --bg-tertiary: #252535;
+  --border: #2e2e42;
+  --text: #e4e4e8;
+  --text-muted: #8888a0;
+  --accent-x: #ff6b6b;
+  --accent-o: #4ecdc4;
+  --accent-monitor: #ffd93d;
+  --accent-blue: #6c8cff;
+  --cell-hover: rgba(108,140,255,0.1);
+  --win-glow: rgba(255,217,61,0.4);
+  --radius: 10px;
+  --shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Header */
+.header {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.header h1 {
+  font-size: 1.3rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent-x), var(--accent-o));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.header-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-tertiary);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+.btn:hover { border-color: var(--accent-blue); background: rgba(108,140,255,0.1); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-primary { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
+.btn-primary:hover { background: #5a7aee; }
+.btn-danger { border-color: var(--accent-x); color: var(--accent-x); }
+.btn-danger:hover { background: rgba(255,107,107,0.1); }
+
+/* Settings Panel */
+.settings-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 200;
+  justify-content: center;
+  align-items: center;
+}
+.settings-overlay.open { display: flex; }
+
+.settings-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+  width: 480px;
+  max-width: 95vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow);
+}
+
+.settings-panel h2 {
+  font-size: 1.15rem;
+  margin-bottom: 20px;
+  color: var(--accent-blue);
+}
+
+.form-group {
+  margin-bottom: 14px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.form-group input, .form-group select {
+  width: 100%;
+  padding: 9px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.form-group input:focus, .form-group select:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.settings-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+/* Main Layout */
+.main-container {
+  display: grid;
+  grid-template-columns: 260px 1fr 260px;
+  grid-template-rows: auto 1fr auto;
+  gap: 0;
+  height: calc(100vh - 53px);
+  padding: 16px;
+}
+
+/* Status Bar */
+.status-bar {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+}
+.status-bar.thinking { color: var(--accent-blue); }
+.status-bar.win-x { color: var(--accent-x); }
+.status-bar.win-o { color: var(--accent-o); }
+.status-bar.draw { color: var(--accent-monitor); }
+
+/* Player Panels */
+.player-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.player-panel-header {
+  padding: 12px 16px;
+  font-weight: 700;
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.player-x .player-panel-header { background: rgba(255,107,107,0.1); color: var(--accent-x); }
+.player-o .player-panel-header { background: rgba(78,205,196,0.1); color: var(--accent-o); }
+
+.player-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  font-size: 0.85rem;
+}
+.player-x .player-icon { background: var(--accent-x); color: #fff; }
+.player-o .player-icon { background: var(--accent-o); color: #fff; }
+
+.player-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.log-entry {
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  border-radius: 6px;
+  background: var(--bg);
+  animation: fadeIn 0.3s ease;
+}
+.log-entry.thinking {
+  color: var(--accent-blue);
+  background: rgba(108,140,255,0.08);
+}
+.log-entry.error {
+  color: var(--accent-x);
+  background: rgba(255,107,107,0.08);
+}
+.log-entry .move-num {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+/* Board Area */
+.board-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  position: relative;
+}
+
+.board-container {
+  display: inline-block;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+  box-shadow: var(--shadow);
+  overflow: auto;
+  max-width: 100%;
+  max-height: calc(100vh - 300px);
+}
+
+.board-area {
+  flex: 1;
+}
+
+.board {
+  display: grid;
+  gap: 1px;
+  background: var(--border);
+}
+
+.cell {
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  cursor: default;
+  transition: background 0.15s;
+  position: relative;
+  aspect-ratio: 1;
+}
+.cell.x { color: var(--accent-x); }
+.cell.o { color: var(--accent-o); }
+.cell.last-move { background: rgba(108,140,255,0.15); }
+.cell.win-cell {
+  animation: winPulse 0.6s ease infinite alternate;
+  background: var(--win-glow);
+}
+
+.board-labels-top, .board-labels-left {
+  display: flex;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+.board-labels-top {
+  padding-left: 22px;
+  margin-bottom: 2px;
+}
+.board-labels-top span {
+  width: 39px;
+  text-align: center;
+}
+.board-labels-left {
+  flex-direction: column;
+  margin-right: 2px;
+}
+.board-labels-left span {
+  height: 39px;
+  width: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.board-with-labels {
+  display: flex;
+}
+
+/* Monitor Panel */
+.monitor-panel {
+  grid-column: 1 / -1;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  max-height: 200px;
+}
+
+.monitor-header {
+  padding: 10px 16px;
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--accent-monitor);
+  background: rgba(255,217,61,0.08);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.monitor-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  font-size: 0.85rem;
+  line-height: 1.7;
+}
+
+.monitor-entry {
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border-left: 3px solid var(--accent-monitor);
+  background: rgba(255,217,61,0.04);
+  border-radius: 0 6px 6px 0;
+  animation: fadeIn 0.3s ease;
+}
+.monitor-entry .move-ref {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+.monitor-entry .commentary {
+  color: var(--text);
+}
+.monitor-entry .commentary .streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--accent-monitor);
+  margin-left: 2px;
+  animation: blink 0.8s step-end infinite;
+  vertical-align: text-bottom;
+}
+
+/* Controls */
+.controls {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 0 0;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.speed-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.speed-control input[type="range"] {
+  width: 100px;
+  accent-color: var(--accent-blue);
+}
+
+.score-display {
+  display: flex;
+  gap: 16px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-left: 20px;
+}
+.score-x { color: var(--accent-x); }
+.score-o { color: var(--accent-o); }
+.score-draw { color: var(--text-muted); }
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes blink {
+  50% { opacity: 0; }
+}
+@keyframes winPulse {
+  from { background: var(--win-glow); }
+  to { background: rgba(255,217,61,0.7); }
+}
+@keyframes placePiece {
+  from { transform: scale(0); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.cell.animate-place {
+  animation: placePiece 0.25s ease-out;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .main-container {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto auto auto;
+  }
+  .player-panel { max-height: 180px; }
+  .board-container { max-height: 50vh; }
+}
+
+/* Board size adjustments — cell size set dynamically via JS */
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <h1>Multi-Agent Caro</h1>
+  <div class="header-buttons">
+    <button class="btn" id="btnSettings">Settings</button>
+  </div>
+</div>
+
+<!-- Settings Overlay -->
+<div class="settings-overlay" id="settingsOverlay">
+  <div class="settings-panel">
+    <h2>Game Settings</h2>
+    <div class="form-group">
+      <label>Base URL</label>
+      <input type="text" id="settingBaseUrl" value="https://litellm.zingplay.com/v1" placeholder="https://litellm.zingplay.com/v1">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>API Key</label>
+        <input type="password" id="settingApiKey" value="sk-rKPjKgfGqRThIGmeO2tk6A" placeholder="API Key">
+      </div>
+      <div class="form-group">
+        <label>Model ID (for API request)</label>
+        <input type="text" id="settingModelId" value="local-model" placeholder="e.g. local-model">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Name — Player X</label>
+        <input type="text" id="settingModelX" placeholder="Display name">
+      </div>
+      <div class="form-group">
+        <label>Name — Player O</label>
+        <input type="text" id="settingModelO" placeholder="Display name">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Name — Monitor</label>
+      <input type="text" id="settingModelMonitor" placeholder="Display name (commentator)">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Board Size</label>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <input type="range" id="settingBoardSize" min="3" max="15" value="10" style="flex:1;accent-color:var(--accent-blue);">
+          <span id="boardSizeLabel" style="min-width:40px;text-align:center;font-weight:700;">10x10</span>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Win Condition (in a row)</label>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <input type="range" id="settingWinCondition" min="3" max="5" value="5" style="flex:1;accent-color:var(--accent-blue);">
+          <span id="winCondLabel" style="min-width:20px;text-align:center;font-weight:700;">5</span>
+        </div>
+      </div>
+    </div>
+    <div class="settings-footer">
+      <button class="btn" id="btnSettingsCancel">Cancel</button>
+      <button class="btn btn-primary" id="btnSettingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main-container">
+  <!-- Status Bar -->
+  <div class="status-bar" id="statusBar">Press "Start Game" to begin</div>
+
+  <!-- Player X Panel -->
+  <div class="player-panel player-x">
+    <div class="player-panel-header">
+      <div class="player-icon">X</div>
+      <span>Player X</span>
+      <span id="modelXName" style="font-size:0.7rem;color:var(--text-muted);margin-left:auto;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+    </div>
+    <div class="player-log" id="logX"></div>
+  </div>
+
+  <!-- Board -->
+  <div class="board-area">
+    <div class="board-container">
+      <div class="board-labels-top" id="labelsTop"></div>
+      <div class="board-with-labels">
+        <div class="board-labels-left" id="labelsLeft"></div>
+        <div class="board" id="board"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Player O Panel -->
+  <div class="player-panel player-o">
+    <div class="player-panel-header">
+      <div class="player-icon">O</div>
+      <span>Player O</span>
+      <span id="modelOName" style="font-size:0.7rem;color:var(--text-muted);margin-left:auto;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+    </div>
+    <div class="player-log" id="logO"></div>
+  </div>
+
+  <!-- Monitor Panel -->
+  <div class="monitor-panel">
+    <div class="monitor-header">
+      <span style="font-size:1.1rem;">&#x1F50D;</span>
+      <span>Monitor — Game Analyst</span>
+      <span id="modelMonitorName" style="font-size:0.7rem;color:var(--text-muted);margin-left:auto;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+    </div>
+    <div class="monitor-body" id="monitorBody">
+      <div style="color:var(--text-muted);font-style:italic;">Waiting for game to start...</div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button class="btn btn-primary" id="btnStart">Start Game</button>
+    <button class="btn" id="btnPause" disabled>Pause</button>
+    <button class="btn btn-danger" id="btnReset" disabled>Reset</button>
+    <div class="speed-control">
+      <span>Delay:</span>
+      <input type="range" id="speedSlider" min="0" max="5000" value="3000" step="100">
+      <span id="speedLabel">500ms</span>
+    </div>
+    <div class="score-display">
+      <span class="score-x" id="scoreX">X: 0</span>
+      <span class="score-draw" id="scoreDraw">Draw: 0</span>
+      <span class="score-o" id="scoreO">O: 0</span>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================
+// ChatAPI — OpenAI-compatible streaming client
+// ============================================
+class ChatAPI {
+  constructor(baseUrl, apiKey, model) {
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.apiKey = apiKey;
+    this.model = model;
+    this.controller = null;
+  }
+
+  abort() {
+    if (this.controller) {
+      this.controller.abort();
+      this.controller = null;
+    }
+  }
+
+  async *stream(messages, { temperature = 0.7, maxTokens = 512 } = {}) {
+    this.controller = new AbortController();
+    const url = `${this.baseUrl}/chat/completions`;
+    const body = {
+      model: this.model,
+      messages,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true
+    };
+
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify(body),
+        signal: this.controller.signal
+      });
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      throw new Error(`Network error: ${e.message}`);
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      if (response.status === 401) throw new Error('Invalid API key (401)');
+      if (response.status === 429) throw new Error('Rate limited (429)');
+      throw new Error(`API error ${response.status}: ${text.slice(0, 200)}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      let result;
+      try {
+        result = await reader.read();
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        throw e;
+      }
+      if (result.done) break;
+
+      buffer += decoder.decode(result.value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data:')) continue;
+        const data = trimmed.slice(5).trim();
+        if (data === '[DONE]') return;
+        try {
+          const json = JSON.parse(data);
+          const delta = json.choices?.[0]?.delta;
+          if (delta?.content) {
+            yield delta.content;
+          }
+        } catch {}
+      }
+    }
+  }
+
+  async complete(messages, { temperature = 0.7, maxTokens = 256 } = {}) {
+    this.controller = new AbortController();
+    const url = `${this.baseUrl}/chat/completions`;
+    const body = {
+      model: this.model,
+      messages,
+      temperature,
+      max_tokens: maxTokens,
+      stream: false
+    };
+
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify(body),
+        signal: this.controller.signal
+      });
+    } catch (e) {
+      if (e.name === 'AbortError') return null;
+      throw new Error(`Network error: ${e.message}`);
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      if (response.status === 401) throw new Error('Invalid API key (401)');
+      if (response.status === 429) throw new Error('Rate limited (429)');
+      throw new Error(`API error ${response.status}: ${text.slice(0, 200)}`);
+    }
+
+    const json = await response.json();
+    return json.choices?.[0]?.message?.content || '';
+  }
+}
+
+// ============================================
+// CaroGame — Game logic
+// ============================================
+class CaroGame {
+  constructor(size = 10, winCondition = 5) {
+    this.size = size;
+    this.winCondition = winCondition;
+    this.reset();
+  }
+
+  reset() {
+    this.board = Array.from({ length: this.size }, () => Array(this.size).fill(null));
+    this.moves = [];
+    this.currentPlayer = 'X';
+    this.winner = null;
+    this.winCells = [];
+    this.gameOver = false;
+  }
+
+  isValidMove(row, col) {
+    return row >= 0 && row < this.size && col >= 0 && col < this.size && !this.board[row][col];
+  }
+
+  makeMove(row, col) {
+    if (this.gameOver || !this.isValidMove(row, col)) return false;
+    this.board[row][col] = this.currentPlayer;
+    this.moves.push({ player: this.currentPlayer, row, col, moveNumber: this.moves.length + 1 });
+
+    const win = this.checkWin(row, col);
+    if (win) {
+      this.winner = this.currentPlayer;
+      this.winCells = win;
+      this.gameOver = true;
+    } else if (this.moves.length === this.size * this.size) {
+      this.gameOver = true; // draw
+    } else {
+      this.currentPlayer = this.currentPlayer === 'X' ? 'O' : 'X';
+    }
+    return true;
+  }
+
+  checkWin(row, col) {
+    const player = this.board[row][col];
+    const directions = [[0,1],[1,0],[1,1],[1,-1]];
+
+    for (const [dr, dc] of directions) {
+      let cells = [[row, col]];
+      // Forward
+      for (let i = 1; i < this.winCondition; i++) {
+        const r = row + dr * i, c = col + dc * i;
+        if (r >= 0 && r < this.size && c >= 0 && c < this.size && this.board[r][c] === player) {
+          cells.push([r, c]);
+        } else break;
+      }
+      // Backward
+      for (let i = 1; i < this.winCondition; i++) {
+        const r = row - dr * i, c = col - dc * i;
+        if (r >= 0 && r < this.size && c >= 0 && c < this.size && this.board[r][c] === player) {
+          cells.push([r, c]);
+        } else break;
+      }
+      if (cells.length >= this.winCondition) return cells;
+    }
+    return null;
+  }
+
+  boardToText() {
+    let header = '   ' + Array.from({ length: this.size }, (_, i) => String(i).padStart(3)).join('');
+    let rows = this.board.map((row, r) =>
+      String(r).padStart(2) + ' ' + row.map(c => (c || '.').padStart(3)).join('')
+    );
+    return header + '\n' + rows.join('\n');
+  }
+
+  lastMoveText() {
+    if (this.moves.length === 0) return 'No moves yet.';
+    const m = this.moves[this.moves.length - 1];
+    return `Move #${m.moveNumber}: Player ${m.player} placed at (${m.row}, ${m.col})`;
+  }
+
+  moveHistoryText() {
+    if (this.moves.length === 0) return 'No moves yet.';
+    return this.moves.map(m => `#${m.moveNumber} ${m.player}→(${m.row},${m.col})`).join(', ');
+  }
+
+  // Score a line segment for a given player at a given empty cell
+  _scoreLine(r, c, dr, dc, who) {
+    const W = this.winCondition;
+    // Count consecutive same-color pieces in both directions from (r,c)
+    let fwd = 0, bwd = 0;
+    for (let i = 1; i <= W; i++) {
+      const nr = r + dr * i, nc = c + dc * i;
+      if (nr < 0 || nr >= this.size || nc < 0 || nc >= this.size) break;
+      if (this.board[nr][nc] === who) fwd++; else break;
+    }
+    for (let i = 1; i <= W; i++) {
+      const nr = r - dr * i, nc = c - dc * i;
+      if (nr < 0 || nr >= this.size || nc < 0 || nc >= this.size) break;
+      if (this.board[nr][nc] === who) bwd++; else break;
+    }
+    const consecutive = fwd + bwd; // pieces around this cell (not counting cell itself)
+
+    // Check open ends (empty beyond the consecutive run)
+    let openEnds = 0;
+    const fwdR = r + dr * (fwd + 1), fwdC = c + dc * (fwd + 1);
+    if (fwdR >= 0 && fwdR < this.size && fwdC >= 0 && fwdC < this.size && !this.board[fwdR][fwdC]) openEnds++;
+    const bwdR = r - dr * (bwd + 1), bwdC = c - dc * (bwd + 1);
+    if (bwdR >= 0 && bwdR < this.size && bwdC >= 0 && bwdC < this.size && !this.board[bwdR][bwdC]) openEnds++;
+
+    // Also check: can this line even reach W? Count total space in this direction
+    let space = 1; // the cell itself
+    for (let i = 1; i < W; i++) {
+      const nr = r + dr * i, nc = c + dc * i;
+      if (nr < 0 || nr >= this.size || nc < 0 || nc >= this.size) break;
+      if (this.board[nr][nc] === who || !this.board[nr][nc]) space++; else break;
+    }
+    for (let i = 1; i < W; i++) {
+      const nr = r - dr * i, nc = c - dc * i;
+      if (nr < 0 || nr >= this.size || nc < 0 || nc >= this.size) break;
+      if (this.board[nr][nc] === who || !this.board[nr][nc]) space++; else break;
+    }
+    // If total space < W, this line can never win
+    if (space < W) return { consecutive, openEnds, score: 0 };
+
+    const total = consecutive + 1; // including this cell
+    let score = 0;
+
+    if (total >= W) {
+      score = 1000000; // instant win
+    } else if (total === W - 1) {
+      score = openEnds >= 2 ? 50000 : (openEnds === 1 ? 8000 : 0);
+    } else if (total === W - 2) {
+      score = openEnds >= 2 ? 3000 : (openEnds === 1 ? 500 : 0);
+    } else if (total === W - 3 && W >= 5) {
+      score = openEnds >= 2 ? 400 : (openEnds === 1 ? 50 : 0);
+    } else if (consecutive >= 1) {
+      score = openEnds >= 2 ? 30 : (openEnds === 1 ? 5 : 0);
+    }
+
+    return { consecutive, openEnds, score };
+  }
+
+  // Score every empty cell for a given player, return sorted top moves
+  scoreAllMoves(player) {
+    const opponent = player === 'X' ? 'O' : 'X';
+    const directions = [[0,1],[1,0],[1,1],[1,-1]];
+    const scores = [];
+    const center = Math.floor(this.size / 2);
+
+    for (let r = 0; r < this.size; r++) {
+      for (let c = 0; c < this.size; c++) {
+        if (this.board[r][c]) continue;
+
+        // Check proximity to existing pieces (skip isolated cells)
+        let nearPiece = this.moves.length === 0;
+        if (!nearPiece) {
+          outer: for (let dr = -2; dr <= 2; dr++) {
+            for (let dc = -2; dc <= 2; dc++) {
+              const nr = r + dr, nc = c + dc;
+              if (nr >= 0 && nr < this.size && nc >= 0 && nc < this.size && this.board[nr][nc]) {
+                nearPiece = true; break outer;
+              }
+            }
+          }
+        }
+        if (!nearPiece) continue;
+
+        let attackScore = 0, defendScore = 0;
+        let bestAttackInfo = '', bestDefendInfo = '';
+
+        for (const [dr, dc] of directions) {
+          const atk = this._scoreLine(r, c, dr, dc, player);
+          const def = this._scoreLine(r, c, dr, dc, opponent);
+
+          if (atk.score > 0) {
+            attackScore += atk.score;
+            if (atk.score >= 50000) bestAttackInfo = 'WIN';
+            else if (atk.score >= 8000 && !bestAttackInfo) bestAttackInfo = `${this.winCondition - 1}-threat`;
+            else if (atk.score >= 3000 && !bestAttackInfo) bestAttackInfo = `${this.winCondition - 2}-open`;
+          }
+          if (def.score > 0) {
+            defendScore += def.score;
+            if (def.score >= 50000) bestDefendInfo = 'BLOCK-WIN';
+            else if (def.score >= 8000 && !bestDefendInfo) bestDefendInfo = `block-${this.winCondition - 1}`;
+            else if (def.score >= 3000 && !bestDefendInfo) bestDefendInfo = `block-${this.winCondition - 2}`;
+          }
+        }
+
+        // Combine: attack slightly preferred, but blocking critical threats is paramount
+        // Defend scores are weighted 0.9x to prefer attack when equal
+        const totalScore = attackScore + defendScore * 0.9;
+
+        // Small center bonus
+        const distCenter = Math.abs(r - center) + Math.abs(c - center);
+        const centerBonus = Math.max(0, (this.size - distCenter)) * 2;
+
+        const reason = bestAttackInfo || bestDefendInfo || 'positional';
+        scores.push({ row: r, col: c, total: totalScore + centerBonus, attack: attackScore, defend: defendScore, reason });
+      }
+    }
+
+    scores.sort((a, b) => b.total - a.total);
+    return scores;
+  }
+
+  // Generate ranked move recommendations
+  getTopMoves(player, count = 5) {
+    const scores = this.scoreAllMoves(player);
+    return scores.slice(0, count);
+  }
+
+  // Generate tactical advice text with clear ranked recommendations
+  getTacticalAdvice(player) {
+    const topMoves = this.getTopMoves(player, 5);
+    if (topMoves.length === 0) return 'No moves available.';
+
+    const lines = [];
+    const best = topMoves[0];
+
+    // Clear directive based on best move
+    if (best.attack >= 1000000) {
+      lines.push(`>>> WINNING MOVE: ${best.row},${best.col} — play this to WIN immediately! <<<`);
+    } else if (best.defend >= 1000000) {
+      lines.push(`>>> MUST BLOCK: ${best.row},${best.col} — opponent wins next turn if you don't! <<<`);
+    }
+
+    lines.push('RECOMMENDED MOVES (best first):');
+    topMoves.forEach((m, i) => {
+      const tag = m.reason === 'WIN' ? '[WIN!]' :
+                  m.reason === 'BLOCK-WIN' ? '[BLOCK!]' :
+                  m.reason.includes('threat') ? '[ATTACK]' :
+                  m.reason.includes('block') ? '[DEFEND]' :
+                  m.reason.includes('open') ? '[BUILD]' : '[POS]';
+      lines.push(`  ${i + 1}. ${m.row},${m.col} ${tag} (score:${Math.round(m.total)})`);
+    });
+
+    return lines.join('\n');
+  }
+}
+
+// ============================================
+// LLMPlayer — AI player agent
+// ============================================
+class LLMPlayer {
+  constructor(playerSymbol, api) {
+    this.symbol = playerSymbol;
+    this.api = api;
+    this.maxRetries = 3;
+  }
+
+  buildPrompt(game) {
+    const tactics = game.getTacticalAdvice(this.symbol);
+    const topMoves = game.getTopMoves(this.symbol, 5);
+    const best = topMoves[0];
+    const opponent = this.symbol === 'X' ? 'O' : 'X';
+
+    // If there's an obvious best move (win or must-block), make prompt super direct
+    const isUrgent = best && (best.attack >= 1000000 || best.defend >= 1000000);
+
+    return [
+      {
+        role: 'system',
+        content: `You play Caro (Gomoku) as ${this.symbol}. Board ${game.size}x${game.size}, need ${game.winCondition} in a row.
+An AI engine has analyzed the board and ranked the best moves for you.
+${isUrgent ? 'CRITICAL: Play the #1 recommended move! It is urgent (win or block).' : 'Pick the best move from the recommendations. Prefer #1 unless you see a strong reason not to.'}
+Reply with ONLY: ROW,COL — nothing else.`
+      },
+      {
+        role: 'user',
+        content: `${game.boardToText()}
+
+${tactics}
+
+Reply ONLY: ROW,COL`
+      }
+    ];
+  }
+
+  parseMove(text) {
+    // Try to find ROW,COL pattern
+    const match = text.trim().match(/(\d{1,2})\s*[,\s]\s*(\d{1,2})/);
+    if (match) {
+      return { row: parseInt(match[1]), col: parseInt(match[2]) };
+    }
+    return null;
+  }
+
+  getNearbyCells(game) {
+    // Get empty cells near existing pieces (within 2 cells)
+    const nearby = new Set();
+    for (const m of game.moves) {
+      for (let dr = -2; dr <= 2; dr++) {
+        for (let dc = -2; dc <= 2; dc++) {
+          const r = m.row + dr, c = m.col + dc;
+          if (r >= 0 && r < game.size && c >= 0 && c < game.size && !game.board[r][c]) {
+            nearby.add(`${r},${c}`);
+          }
+        }
+      }
+    }
+    return [...nearby].slice(0, 20);
+  }
+
+  async getMove(game, onLog) {
+    const invalidMoves = [];
+
+    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+      try {
+        const messages = this.buildPrompt(game);
+        if (attempt > 0) {
+          const nearbyCells = this.getNearbyCells(game);
+          messages.push({
+            role: 'assistant',
+            content: invalidMoves[invalidMoves.length - 1]
+          });
+          messages.push({
+            role: 'user',
+            content: `INVALID! "${invalidMoves[invalidMoves.length - 1]}" is already occupied or out of bounds.
+DO NOT repeat: ${invalidMoves.join(', ')}
+Valid empty cells nearby: ${nearbyCells.join('  ')}
+Pick ONE from the list above. Reply ONLY: ROW,COL`
+          });
+        }
+
+        onLog?.(`Thinking... (attempt ${attempt + 1}/${this.maxRetries})`, 'thinking');
+
+        const response = await this.api.complete(messages, { temperature: 0.3 + attempt * 0.3, maxTokens: 32 });
+        if (!response) return null; // aborted
+
+        onLog?.(`Response: "${response.trim()}"`, 'info');
+
+        const move = this.parseMove(response);
+        if (!move) {
+          onLog?.(`Could not parse move from: "${response.trim()}"`, 'error');
+          invalidMoves.push(response.trim());
+          continue;
+        }
+
+        if (!game.isValidMove(move.row, move.col)) {
+          onLog?.(`Invalid move (${move.row},${move.col}) — cell occupied or out of bounds`, 'error');
+          invalidMoves.push(`${move.row},${move.col}`);
+          continue;
+        }
+
+        return move;
+      } catch (e) {
+        onLog?.(`Error: ${e.message}`, 'error');
+        if (attempt === this.maxRetries - 1) throw e;
+      }
+    }
+
+    // All retries failed — pick a random valid move
+    onLog?.('All retries failed, picking random move', 'error');
+    const emptyCells = [];
+    for (let r = 0; r < game.size; r++) {
+      for (let c = 0; c < game.size; c++) {
+        if (!game.board[r][c]) emptyCells.push({ row: r, col: c });
+      }
+    }
+    if (emptyCells.length === 0) return null;
+    return emptyCells[Math.floor(Math.random() * emptyCells.length)];
+  }
+}
+
+// ============================================
+// LLMMonitor — Commentary agent
+// ============================================
+class LLMMonitor {
+  constructor(api) {
+    this.api = api;
+    this.history = []; // conversation history for context
+  }
+
+  reset() {
+    this.history = [];
+  }
+
+  buildPrompt(game) {
+    const gameStatus = game.gameOver
+      ? (game.winner ? `Player ${game.winner} has WON!` : 'The game is a DRAW!')
+      : `Game in progress — Player ${game.currentPlayer}'s turn next.`;
+
+    const messages = [
+      {
+        role: 'system',
+        content: `Bạn là bình luận viên game Caro (Gomoku) chuyên nghiệp. Bình luận 1 câu duy nhất, ngắn gọn, sắc sảo, bằng tiếng Việt. Phong cách thể thao sôi động.
+
+THÔNG TIN GAME:
+- Bàn cờ: ${game.size}x${game.size} (${game.size * game.size} ô)
+- Điều kiện thắng: xếp ${game.winCondition} quân liên tiếp (ngang, dọc, hoặc chéo)
+- Luật chơi: 2 người chơi (X và O) lần lượt đặt quân, X đi trước. Ai xếp được ${game.winCondition} quân liên tiếp trước thì thắng. Nếu hết ô mà chưa ai thắng thì hòa.
+- Chiến thuật cơ bản: tạo chuỗi mở 2 đầu (không bị chặn) rất nguy hiểm; chuỗi ${game.winCondition - 1} mở 2 đầu gần như chắc thắng; cần vừa tấn công vừa phòng thủ.
+
+Bạn được cung cấp: bàn cờ hiện tại, lịch sử nước đi, và phân tích chiến thuật.
+Hãy bình luận về chiến thuật, mối đe dọa, hoặc dự đoán. Không lặp lại ý đã nói trước đó.`
+      }
+    ];
+
+    // Add previous conversation history (keep last 10 exchanges to limit tokens)
+    const recentHistory = this.history.slice(-20);
+    messages.push(...recentHistory);
+
+    // Build move history text (compact format)
+    const moveHistory = game.moves.length > 0
+      ? game.moves.map(m => `#${m.moveNumber}:${m.player}(${m.row},${m.col})`).join(' → ')
+      : 'Chưa có nước đi.';
+
+    // Get tactical situation for both players
+    let tacticalInfo = '';
+    if (!game.gameOver && game.moves.length > 0) {
+      const topX = game.getTopMoves('X', 3);
+      const topO = game.getTopMoves('O', 3);
+      const formatMoves = (moves) => moves.map(m => {
+        const tag = m.attack >= 1000000 ? 'WIN' : m.defend >= 1000000 ? 'BLOCK' : m.attack >= 8000 ? 'threat' : m.defend >= 8000 ? 'danger' : '';
+        return `(${m.row},${m.col})${tag ? '[' + tag + ']' : ''}`;
+      }).join(', ');
+      tacticalInfo = `\nPhân tích: X nên đi ${formatMoves(topX)} | O nên đi ${formatMoves(topO)}`;
+    }
+
+    // Add current board state with full context
+    messages.push({
+      role: 'user',
+      content: `Bàn cờ (${game.size}x${game.size}, cần ${game.winCondition} liên tiếp):
+${game.boardToText()}
+
+Lịch sử: ${moveHistory}
+
+Nước đi mới nhất — ${game.lastMoveText()}
+Trạng thái: ${gameStatus}${tacticalInfo}
+
+Bình luận 1 câu:`
+    });
+
+    return messages;
+  }
+
+  async commentStream(game, onChunk, onDone) {
+    try {
+      const messages = this.buildPrompt(game);
+      let full = '';
+      for await (const chunk of this.api.stream(messages, { temperature: 0.8, maxTokens: 100 })) {
+        full += chunk;
+        onChunk?.(chunk, full);
+      }
+
+      // Save to history for context (include move details for continuity)
+      const lastMove = game.moves[game.moves.length - 1];
+      const historyEntry = lastMove
+        ? `Nước #${lastMove.moveNumber}: ${lastMove.player}(${lastMove.row},${lastMove.col})${game.gameOver ? (game.winner ? ` → ${game.winner} thắng!` : ' → Hòa!') : ''}`
+        : game.lastMoveText();
+      this.history.push(
+        { role: 'user', content: historyEntry },
+        { role: 'assistant', content: full }
+      );
+      onDone?.(full);
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      onDone?.(`[Error: ${e.message}]`);
+    }
+  }
+}
+
+// ============================================
+// GameController — Orchestrates everything
+// ============================================
+class GameController {
+  constructor() {
+    this.game = null;
+    this.playerX = null;
+    this.playerO = null;
+    this.monitor = null;
+    this.running = false;
+    this.paused = false;
+    this.score = { X: 0, O: 0, draw: 0 };
+    this.delay = 500;
+
+    this.loadSettings();
+    this.initUI();
+    this.renderBoard();
+  }
+
+  // Settings
+  loadSettings() {
+    const saved = localStorage.getItem('caro_settings');
+    if (saved) {
+      try {
+        this.settings = { ...this.defaultSettings(), ...JSON.parse(saved) };
+      } catch { this.settings = this.defaultSettings(); }
+    } else {
+      this.settings = this.defaultSettings();
+    }
+  }
+
+  defaultSettings() {
+    return {
+      baseUrl: 'https://litellm.zingplay.com/v1',
+      apiKey: 'sk-rKPjKgfGqRThIGmeO2tk6A',
+      modelId: 'local-model',
+      modelX: 'Agent X',
+      modelO: 'Agent O',
+      modelMonitor: 'Agent Monitoring',
+      boardSize: 10,
+      winCondition: 5,
+      delay: 3000
+    };
+  }
+
+  saveSettings() {
+    localStorage.setItem('caro_settings', JSON.stringify(this.settings));
+  }
+
+  // UI Init
+  initUI() {
+    // Settings
+    const s = this.settings;
+    const $ = id => document.getElementById(id);
+
+    $('settingBaseUrl').value = s.baseUrl;
+    $('settingApiKey').value = s.apiKey;
+    $('settingModelId').value = s.modelId;
+    $('settingModelX').value = s.modelX;
+    $('settingModelO').value = s.modelO;
+    $('settingModelMonitor').value = s.modelMonitor;
+    $('settingBoardSize').value = s.boardSize;
+    $('settingWinCondition').value = s.winCondition;
+    $('boardSizeLabel').textContent = `${s.boardSize}x${s.boardSize}`;
+    $('winCondLabel').textContent = s.winCondition;
+
+    $('modelXName').textContent = s.modelX || '(not set)';
+    $('modelOName').textContent = s.modelO || '(not set)';
+    $('modelMonitorName').textContent = s.modelMonitor || '(not set)';
+
+    // Settings listeners
+    $('settingBoardSize').addEventListener('input', e => {
+      $('boardSizeLabel').textContent = `${e.target.value}x${e.target.value}`;
+      const size = parseInt(e.target.value);
+      if (size <= 5) {
+        $('settingWinCondition').value = 3;
+        $('settingWinCondition').max = 3;
+        $('winCondLabel').textContent = '3';
+      } else {
+        $('settingWinCondition').max = 5;
+      }
+    });
+    $('settingWinCondition').addEventListener('input', e => {
+      $('winCondLabel').textContent = e.target.value;
+    });
+
+    $('btnSettings').addEventListener('click', () => $('settingsOverlay').classList.add('open'));
+    $('btnSettingsCancel').addEventListener('click', () => $('settingsOverlay').classList.remove('open'));
+    $('settingsOverlay').addEventListener('click', e => {
+      if (e.target === $('settingsOverlay')) $('settingsOverlay').classList.remove('open');
+    });
+    $('btnSettingsSave').addEventListener('click', () => {
+      this.settings.baseUrl = $('settingBaseUrl').value.trim();
+      this.settings.apiKey = $('settingApiKey').value.trim();
+      this.settings.modelId = $('settingModelId').value.trim();
+      this.settings.modelX = $('settingModelX').value.trim();
+      this.settings.modelO = $('settingModelO').value.trim();
+      this.settings.modelMonitor = $('settingModelMonitor').value.trim();
+      this.settings.boardSize = parseInt($('settingBoardSize').value);
+      this.settings.winCondition = parseInt($('settingWinCondition').value);
+      this.saveSettings();
+      $('modelXName').textContent = this.settings.modelX || '(not set)';
+      $('modelOName').textContent = this.settings.modelO || '(not set)';
+      $('modelMonitorName').textContent = this.settings.modelMonitor || '(not set)';
+      $('settingsOverlay').classList.remove('open');
+      if (!this.running) this.resetGame();
+    });
+
+    // Game controls
+    $('btnStart').addEventListener('click', () => this.startGame());
+    $('btnPause').addEventListener('click', () => this.togglePause());
+    $('btnReset').addEventListener('click', () => this.resetGame());
+
+    $('speedSlider').value = s.delay;
+    $('speedLabel').textContent = `${s.delay}ms`;
+    this.delay = s.delay;
+
+    $('speedSlider').addEventListener('input', e => {
+      this.delay = parseInt(e.target.value);
+      this.settings.delay = this.delay;
+      this.saveSettings();
+      $('speedLabel').textContent = `${this.delay}ms`;
+    });
+
+    this.updateScoreDisplay();
+  }
+
+  renderBoard() {
+    const size = this.settings.boardSize;
+    this.game = new CaroGame(size, this.settings.winCondition);
+
+    // Calculate cell size to fill available space
+    const boardArea = document.querySelector('.board-area');
+    const availH = boardArea.clientHeight - 40; // padding + labels
+    const availW = boardArea.clientWidth - 40;
+    const maxCellSize = Math.floor(Math.min(availH, availW) / size) - 1; // -1 for gap
+    const cellSize = Math.max(28, Math.min(70, maxCellSize));
+    const fontSize = cellSize >= 50 ? '1.4rem' : (cellSize >= 38 ? '1.1rem' : '0.85rem');
+
+    const boardEl = document.getElementById('board');
+    boardEl.innerHTML = '';
+    boardEl.className = 'board';
+    boardEl.style.gridTemplateColumns = `repeat(${size}, ${cellSize}px)`;
+
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.style.width = cellSize + 'px';
+        cell.style.height = cellSize + 'px';
+        cell.style.fontSize = fontSize;
+        cell.dataset.row = r;
+        cell.dataset.col = c;
+        boardEl.appendChild(cell);
+      }
+    }
+
+    // Labels
+    const labelsTop = document.getElementById('labelsTop');
+    const labelsLeft = document.getElementById('labelsLeft');
+    labelsTop.innerHTML = '';
+    labelsLeft.innerHTML = '';
+    labelsTop.style.paddingLeft = '22px';
+
+    for (let i = 0; i < size; i++) {
+      const sp = document.createElement('span');
+      sp.textContent = i;
+      sp.style.width = (cellSize + 1) + 'px';
+      labelsTop.appendChild(sp);
+    }
+    for (let i = 0; i < size; i++) {
+      const sp = document.createElement('span');
+      sp.textContent = i;
+      sp.style.height = (cellSize + 1) + 'px';
+      labelsLeft.appendChild(sp);
+    }
+  }
+
+  updateBoardUI() {
+    const boardEl = document.getElementById('board');
+    const cells = boardEl.children;
+    const game = this.game;
+    const lastMove = game.moves.length > 0 ? game.moves[game.moves.length - 1] : null;
+
+    for (let r = 0; r < game.size; r++) {
+      for (let c = 0; c < game.size; c++) {
+        const cell = cells[r * game.size + c];
+        const val = game.board[r][c];
+        cell.textContent = val || '';
+        cell.className = 'cell';
+        if (val === 'X') cell.classList.add('x');
+        if (val === 'O') cell.classList.add('o');
+        if (lastMove && lastMove.row === r && lastMove.col === c) {
+          cell.classList.add('last-move', 'animate-place');
+        }
+        if (game.winCells.some(([wr, wc]) => wr === r && wc === c)) {
+          cell.classList.add('win-cell');
+        }
+      }
+    }
+  }
+
+  setStatus(text, cls = '') {
+    const bar = document.getElementById('statusBar');
+    bar.textContent = text;
+    bar.className = 'status-bar' + (cls ? ' ' + cls : '');
+  }
+
+  addLog(panel, text, type = 'info') {
+    const log = document.getElementById(panel);
+    const entry = document.createElement('div');
+    entry.className = 'log-entry' + (type !== 'info' ? ' ' + type : '');
+    entry.textContent = text;
+    log.appendChild(entry);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  clearLogs() {
+    document.getElementById('logX').innerHTML = '';
+    document.getElementById('logO').innerHTML = '';
+    document.getElementById('monitorBody').innerHTML = '';
+  }
+
+  addMonitorEntry(moveRef) {
+    const body = document.getElementById('monitorBody');
+    const entry = document.createElement('div');
+    entry.className = 'monitor-entry';
+    entry.innerHTML = `<div class="move-ref">${moveRef}</div><div class="commentary"><span class="commentary-text"></span><span class="streaming-cursor"></span></div>`;
+    body.appendChild(entry);
+    body.scrollTop = body.scrollHeight;
+    return entry.querySelector('.commentary-text');
+  }
+
+  removeStreamingCursor(textEl) {
+    const cursor = textEl.parentElement?.querySelector('.streaming-cursor');
+    if (cursor) cursor.remove();
+  }
+
+  updateScoreDisplay() {
+    document.getElementById('scoreX').textContent = `X: ${this.score.X}`;
+    document.getElementById('scoreO').textContent = `O: ${this.score.O}`;
+    document.getElementById('scoreDraw').textContent = `Draw: ${this.score.draw}`;
+  }
+
+  // Game flow
+  async startGame() {
+    const s = this.settings;
+    if (!s.modelId) {
+      this.setStatus('Please set Model ID in Settings first!');
+      document.getElementById('settingsOverlay').classList.add('open');
+      return;
+    }
+
+    this.renderBoard();
+    this.clearLogs();
+    this.running = true;
+    this.paused = false;
+
+    document.getElementById('btnStart').disabled = true;
+    document.getElementById('btnPause').disabled = false;
+    document.getElementById('btnReset').disabled = false;
+    document.getElementById('btnPause').textContent = 'Pause';
+
+    const apiX = new ChatAPI(s.baseUrl, s.apiKey, s.modelId);
+    const apiO = new ChatAPI(s.baseUrl, s.apiKey, s.modelId);
+    const apiM = new ChatAPI(s.baseUrl, s.apiKey, s.modelId);
+
+    this.playerX = new LLMPlayer('X', apiX);
+    this.playerO = new LLMPlayer('O', apiO);
+    this.monitor = new LLMMonitor(apiM);
+    this.apis = [apiX, apiO, apiM];
+
+    this.setStatus('Game started!', 'thinking');
+    this.addLog('logX', 'Game started. Player X goes first.');
+    this.addLog('logO', 'Game started. Waiting for Player X...');
+
+    await this.gameLoop();
+  }
+
+  async gameLoop() {
+    const game = this.game;
+
+    while (!game.gameOver && this.running) {
+      // Wait if paused
+      while (this.paused && this.running) {
+        await this.sleep(200);
+      }
+      if (!this.running) break;
+
+      const isX = game.currentPlayer === 'X';
+      const player = isX ? this.playerX : this.playerO;
+      const logPanel = isX ? 'logX' : 'logO';
+      const playerName = isX ? 'Player X' : 'Player O';
+
+      this.setStatus(`${playerName} is thinking...`, 'thinking');
+
+      try {
+        const move = await player.getMove(game, (msg, type) => {
+          this.addLog(logPanel, msg, type);
+        });
+
+        if (!move || !this.running) break;
+
+        // Make the move
+        game.makeMove(move.row, move.col);
+        this.updateBoardUI();
+
+        const moveNum = game.moves.length;
+        this.addLog(logPanel, `Move #${moveNum}: placed at (${move.row}, ${move.col})`);
+
+        if (game.gameOver) {
+          if (game.winner) {
+            const winClass = game.winner === 'X' ? 'win-x' : 'win-o';
+            this.setStatus(`Player ${game.winner} wins! (${moveNum} moves)`, winClass);
+            this.score[game.winner]++;
+            this.addLog(logPanel, `Player ${game.winner} wins!`);
+          } else {
+            this.setStatus(`Draw! Board full after ${moveNum} moves.`, 'draw');
+            this.score.draw++;
+          }
+          this.updateScoreDisplay();
+        }
+
+        // Monitor commentary
+        if (this.running) {
+          const moveRef = `After move #${moveNum} — ${playerName} at (${move.row},${move.col})`;
+          const textEl = this.addMonitorEntry(moveRef);
+          await this.monitor.commentStream(game,
+            (chunk, full) => {
+              textEl.textContent = full;
+              document.getElementById('monitorBody').scrollTop = document.getElementById('monitorBody').scrollHeight;
+            },
+            () => {
+              this.removeStreamingCursor(textEl);
+            }
+          );
+        }
+
+        // Delay between moves
+        if (!game.gameOver && this.delay > 0 && this.running) {
+          await this.sleep(this.delay);
+        }
+      } catch (e) {
+        this.addLog(logPanel, `Fatal error: ${e.message}`, 'error');
+        this.setStatus(`Error: ${e.message}`);
+        break;
+      }
+    }
+
+    this.running = false;
+    document.getElementById('btnStart').disabled = false;
+    document.getElementById('btnPause').disabled = true;
+  }
+
+  togglePause() {
+    this.paused = !this.paused;
+    document.getElementById('btnPause').textContent = this.paused ? 'Resume' : 'Pause';
+    if (this.paused) {
+      this.setStatus('Game paused');
+    } else {
+      this.setStatus(`Resuming — ${this.game.currentPlayer}'s turn`, 'thinking');
+    }
+  }
+
+  resetGame() {
+    this.running = false;
+    this.paused = false;
+    if (this.apis) {
+      this.apis.forEach(api => api.abort());
+    }
+    this.renderBoard();
+    this.clearLogs();
+    this.setStatus('Press "Start Game" to begin');
+    document.getElementById('btnStart').disabled = false;
+    document.getElementById('btnPause').disabled = true;
+    document.getElementById('btnReset').disabled = true;
+    document.getElementById('btnPause').textContent = 'Pause';
+    document.getElementById('monitorBody').innerHTML = '<div style="color:var(--text-muted);font-style:italic;">Waiting for game to start...</div>';
+  }
+
+  sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+}
+
+// ============================================
+// Init
+// ============================================
+window.addEventListener('DOMContentLoaded', () => {
+  new GameController();
+});
+</script>
+</body>
+</html>
